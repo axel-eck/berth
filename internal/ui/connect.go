@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/axel-eck/berth/internal/session"
+	"github.com/axel-eck/berth/internal/slosh"
 )
 
 type stepState int
@@ -302,6 +303,9 @@ func (m Model) updateConnect(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.slosh != nil {
 					// The pane's title says it too, from every other tab.
 					m.slosh.SetPaneName(m.paneID, e.Label+" · "+c.alias)
+					if e.Name == "prod" {
+						m.signPane = m.openSign(e)
+					}
 				}
 			}
 			return m, tea.Exec(sess.Proxy(m.slosh != nil, cue), func(error) tea.Msg {
@@ -322,6 +326,10 @@ func (m Model) updateConnect(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionEndedMsg:
 		if m.slosh != nil && m.envOf(msg.alias) != nil {
 			m.slosh.SetPaneName(m.paneID, "")
+		}
+		if m.signPane != 0 {
+			m.slosh.Close(m.signPane)
+			m.signPane = 0
 		}
 		if m.exitAfter {
 			// Keep the card up for the last frame rather than flashing the list.
@@ -423,6 +431,36 @@ func (m Model) Summary() string {
 		return m.summary
 	}
 	return ""
+}
+
+// Sign float size, and the pane size that leaves room for it.
+const (
+	signW, signH       = 36, 15
+	signMinW, signMinH = 100, 26
+)
+
+// openSign floats the rotating warning sign in this pane's corner for a
+// production session, when the pane is wide enough to spare the corner.
+// Returns the float's pane id, or 0.
+func (m Model) openSign(e *environment) int {
+	var here slosh.Pane
+	var ok bool
+	if m.paneID != 0 {
+		here, ok = m.slosh.PaneByID(m.paneID)
+	} else {
+		var err error
+		here, err = m.slosh.Here()
+		ok = err == nil
+	}
+	if !ok || here.ContentW < signMinW || here.ContentH < signMinH {
+		return 0
+	}
+	cmd := fmt.Sprintf("%s sign --label %s --color %s --watch %d --self %%d", shq(berthExecutable()), shq(e.Label), shq(e.Hex), here.ID)
+	id, err := m.slosh.OpenSign(here, cmd, signW, signH)
+	if err != nil {
+		return 0
+	}
+	return id
 }
 
 // envOf is the environment of a host by alias, nil when unknown.

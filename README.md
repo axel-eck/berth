@@ -197,8 +197,10 @@ whole session, not just while connecting:
 - on the connection screen, a red frame titled `PROD · db-1`;
 - inside slosh, the pane is renamed `PROD · db-1` and its status line says
   `⚠ PROD · db-1` until ssh exits, visible from every other tab. With
-  `in_band_shaders true` in your slosh config, the pane's frame is tinted
-  red as well;
+  `in_band_shaders true` in your slosh config, the pane's frame lines are
+  tinted red as well. And when the pane has room (100×26 or more), a
+  rotating 3D warning sign floats in its bottom-right corner for the whole
+  session, in a small pane of its own so the shell is never touched;
 - outside slosh, the terminal background is tinted (OSC 11) for the
   session and restored afterwards.
 
