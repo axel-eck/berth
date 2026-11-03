@@ -1,0 +1,39 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build every target
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
+            os="${target%/*}"; arch="${target#*/}"
+            name="berth_${tag#v}_${os}_${arch}"
+            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "-s -w -X main.version=${tag}" -o "dist/${name}/berth" .
+            cp README.md LICENSE "dist/${name}/"
+            tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+            rm -r "dist/${name}"
+          done
+          (cd dist && sha256sum *.tar.gz > checksums.txt)
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz dist/checksums.txt \
+            --title "berth ${GITHUB_REF_NAME}" --generate-notes
