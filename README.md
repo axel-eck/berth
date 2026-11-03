@@ -83,8 +83,12 @@ and berth edits it in place without touching a byte it does not understand.
 ## Install
 
 ```sh
+brew install axel-eck/tap/berth          # macOS and Linux, via Homebrew
 go install github.com/axel-eck/berth@latest
 ```
+
+Prebuilt binaries for macOS and Linux (amd64, arm64) are on the
+[releases page](https://github.com/axel-eck/berth/releases), with checksums.
 
 Needs Go 1.27+ to build, OpenSSH 8.2+ at runtime, and a Unix-like system
 (macOS, Linux). slosh and Ghostty are optional: without them berth is still a
