@@ -32,6 +32,7 @@ const (
 	modeConfirmTerm
 	modeHelp
 	modeConnect
+	modeSocket // asking where to put a control socket
 )
 
 type itemKind int
@@ -70,6 +71,11 @@ type Model struct {
 
 	slosh    *slosh.Client
 	sessions map[string][]slosh.Pane
+	// sockets are the control masters berth knows to be up, alias to path.
+	// Berth's default path is probed on load; others are remembered for
+	// the run.
+	sockets     map[string]string
+	socketInput textinput.Model
 
 	mode       mode
 	saving     bool // a save is in flight: block edits until the reload lands
@@ -95,7 +101,10 @@ func New(path string, sl *slosh.Client, pal Palette, paletteFixed bool) Model {
 	ti.Prompt = ""
 	ti.Placeholder = "filter"
 	ti.SetVirtualCursor(true)
-	m := Model{path: path, slosh: sl, pal: pal, paletteFixed: paletteFixed, filter: ti, sessions: map[string][]slosh.Pane{}, collapsed: map[string]bool{}, mode: modeList}
+	si := textinput.New()
+	si.Prompt = ""
+	si.SetVirtualCursor(true)
+	m := Model{path: path, slosh: sl, pal: pal, paletteFixed: paletteFixed, filter: ti, socketInput: si, sessions: map[string][]slosh.Pane{}, sockets: map[string]string{}, collapsed: map[string]bool{}, mode: modeList}
 	m.st = newStyles(pal)
 	if os.Getenv("BERTH_SPLASH") != "0" {
 		m.splash = newSplash()
@@ -126,6 +135,7 @@ func (m *Model) applyInputStyles() {
 	st.Blurred.Placeholder = m.st.muted
 	st.Cursor.Color = m.pal.Accent
 	m.filter.SetStyles(st)
+	m.socketInput.SetStyles(st)
 }
 
 // ---- messages ----
@@ -329,6 +339,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.startConnect(alias)
 		}
 		return m, nil
+	case socketMsg:
+		if msg.up {
+			m.sockets[msg.alias] = msg.path
+		} else if m.sockets[msg.alias] == msg.path {
+			delete(m.sockets, msg.alias)
+		}
+		return m, nil
+	case socketClosedMsg:
+		if msg.err != nil {
+			return m, m.say("socket: "+shortErr(msg.err), true)
+		}
+		delete(m.sockets, msg.alias)
+		return m, m.say(msg.alias+": socket closed", false)
 	case sessionStartedMsg, sessionEventMsg, sessionEndedMsg, spinMsg, countdownMsg:
 		if m.conn == nil {
 			// The card was left before ssh had even started: don't orphan it.
@@ -503,6 +526,12 @@ func (m Model) onLoaded(msg loadedMsg) (tea.Model, tea.Cmd) {
 		if h.Wildcard {
 			continue
 		}
+		// A master may have been left by an earlier run, at berth's path.
+		if p, known := m.sockets[h.Alias]; known {
+			cmds = append(cmds, socketCheckCmd(h.Alias, p))
+		} else {
+			cmds = append(cmds, socketCheckCmd(h.Alias, probe.DefaultSocket(h.Alias)))
+		}
 		if o, ok := old[h.Alias]; ok && o.Eff != nil && o.Block.File.Content() == h.Block.File.Content() {
 			h.Eff, h.Reach, h.Latency, h.ReachErr = o.Eff, o.Reach, o.Latency, o.ReachErr
 			continue
@@ -550,6 +579,25 @@ func (m Model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case modeHelp:
 		m.mode = modeList
 		return m, nil
+	case modeSocket:
+		switch key {
+		case "esc":
+			m.mode = modeList
+			m.socketInput.Blur()
+			return m, nil
+		case "enter":
+			path := strings.TrimSpace(m.socketInput.Value())
+			h := m.current()
+			m.socketInput.Blur()
+			if h == nil || path == "" || strings.ContainsAny(path, " \t'\"") {
+				m.mode = modeList
+				return m, m.say("socket path cannot be empty or contain spaces or quotes", true)
+			}
+			return m.startMaster(h.Alias, path)
+		}
+		var cmd tea.Cmd
+		m.socketInput, cmd = m.socketInput.Update(k)
+		return m, cmd
 	case modeConfirmDelete:
 		m.mode = modeList
 		if key == "y" || key == "enter" {
@@ -730,6 +778,28 @@ func (m Model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if connectable {
 			return m, tea.Batch(tea.SetClipboard("ssh "+h.Alias), m.say("copied: ssh "+h.Alias, false))
 		}
+	case "M":
+		if !connectable {
+			return m, nil
+		}
+		if p, up := m.sockets[h.Alias]; up {
+			return m, m.say("a socket is already up at "+p+" · X closes it", true)
+		}
+		m.socketInput.SetValue(probe.DefaultSocket(h.Alias))
+		m.socketInput.CursorEnd()
+		m.mode = modeSocket
+		return m, m.socketInput.Focus()
+	case "X":
+		if p, up := m.sockets[h.Alias]; up {
+			return m, socketCloseCmd(h.Alias, p)
+		}
+		return m, m.say("no socket up for "+h.Alias+" · M opens one", true)
+	case "Y":
+		if p, up := m.sockets[h.Alias]; up {
+			cmd := "ssh -S " + p + " " + h.Alias
+			return m, tea.Batch(tea.SetClipboard(cmd), m.say("copied: "+cmd, false))
+		}
+		return m, m.say("no socket up for "+h.Alias+" · M opens one", true)
 	case "i":
 		if connectable {
 			return m, terminfoCmd(h.Alias)

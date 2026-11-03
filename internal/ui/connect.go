@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/axel-eck/berth/internal/probe"
 	"github.com/axel-eck/berth/internal/session"
 	"github.com/axel-eck/berth/internal/slosh"
 )
@@ -35,9 +36,12 @@ type note struct {
 	warn bool
 }
 
-// connect is the screen between pressing enter and getting a shell.
+// connect is the screen between pressing enter and getting a shell, or,
+// for a control master, between pressing M and the socket being up.
 type connect struct {
 	alias     string
+	master    bool
+	socket    string
 	sess      *session.Session
 	steps     [4]stepView
 	notes     []note
@@ -66,6 +70,14 @@ func newConnect(alias string, pal Palette) *connect {
 	return c
 }
 
+// newMaster is the card for a control master: same steps, no shell.
+func newMaster(alias, socket string, pal Palette) *connect {
+	c := newConnect(alias, pal)
+	c.master, c.socket = true, socket
+	c.steps[session.StepSession] = stepView{text: "background master"}
+	return c
+}
+
 type sessionStartedMsg struct {
 	sess *session.Session
 	err  error
@@ -88,9 +100,9 @@ func countdownCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return countdownMsg{} })
 }
 
-func startSessionCmd(alias string, cols, rows int) tea.Cmd {
+func startSessionCmd(alias string, cols, rows int, opts session.Options) tea.Cmd {
 	return func() tea.Msg {
-		s, err := session.Start(alias, cols, rows)
+		s, err := session.Start(alias, cols, rows, opts)
 		return sessionStartedMsg{s, err}
 	}
 }
@@ -173,6 +185,9 @@ func (m Model) connectLines(w int) []string {
 	var lines []string
 	h := m.byAlias(c.alias)
 	lines = append(lines, "")
+	if c.master {
+		lines = append(lines, "  "+m.st.muted.Render("control master · ")+m.st.hint.Render(c.socket))
+	}
 	if h != nil {
 		head := lipgloss.NewStyle().Bold(true).Render(h.target())
 		if e := h.env(); e != nil {
@@ -266,12 +281,23 @@ func (m Model) connectLines(w int) []string {
 
 func (m Model) startConnect(alias string) (Model, tea.Cmd) {
 	m.conn = newConnect(alias, m.pal)
+	return m.launch(session.Options{})
+}
+
+// startMaster opens a control socket for alias at path, through the same
+// card so touches and PINs are asked the same way.
+func (m Model) startMaster(alias, path string) (Model, tea.Cmd) {
+	m.conn = newMaster(alias, path, m.pal)
+	return m.launch(session.Options{Args: probe.MasterArgs(path), Master: true})
+}
+
+func (m Model) launch(opts session.Options) (Model, tea.Cmd) {
 	m.mode = modeConnect
 	cols, rows := m.width, m.height
 	if cols == 0 {
 		cols, rows = 80, 24
 	}
-	return m, tea.Batch(startSessionCmd(alias, cols, rows), spinCmd())
+	return m, tea.Batch(startSessionCmd(m.conn.alias, cols, rows, opts), spinCmd())
 }
 
 func (m Model) updateConnect(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -312,6 +338,16 @@ func (m Model) updateConnect(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return sessionEndedMsg{sess.Alias, time.Since(started).Round(time.Second), sess.ExitCode()}
 			})
 		case session.EvExit:
+			if c.master && msg.ev.Err == nil {
+				// ssh authenticated and forked: the socket is up.
+				m.sockets[c.alias] = c.socket
+				m.conn = nil
+				m.mode = modeList
+				return m, tea.Batch(
+					m.say("socket up: "+c.socket+" · Y copies ssh -S", false),
+					socketCheckCmd(c.alias, c.socket),
+				)
+			}
 			if m.exitAfter {
 				c.closeIn = 8
 				return m, countdownCmd()
@@ -368,6 +404,9 @@ func (m Model) updateConnect(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if c.failed != "" {
 			switch key {
 			case "enter", "r":
+				if c.master {
+					return m.startMaster(c.alias, c.socket)
+				}
 				return m.startConnect(c.alias)
 			case "esc", "q":
 				return m.leaveConnect()
@@ -526,4 +565,21 @@ func spawnCommand(alias string) string {
 		cfg = "-config " + shq(session.ConfigFile) + " "
 	}
 	return strings.Join(env, " ") + " " + shq(berthExecutable()) + " " + cfg + "connect " + shq(alias)
+}
+
+type socketMsg struct {
+	alias, path string
+	up          bool
+}
+type socketClosedMsg struct {
+	alias string
+	err   error
+}
+
+func socketCheckCmd(alias, path string) tea.Cmd {
+	return func() tea.Msg { return socketMsg{alias, path, probe.SocketUp(alias, path)} }
+}
+
+func socketCloseCmd(alias, path string) tea.Cmd {
+	return func() tea.Msg { return socketClosedMsg{alias, probe.SocketClose(alias, path)} }
 }

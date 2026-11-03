@@ -89,6 +89,7 @@ type Session struct {
 	Events  chan Event
 	Started time.Time
 
+	master  bool
 	cmd     *exec.Cmd
 	pty     *os.File
 	logPath string
@@ -114,14 +115,24 @@ type Session struct {
 	exitErr  error
 }
 
+// Options tune what Start runs.
+type Options struct {
+	// Args go before the alias: -M -S path -f -N for a control master.
+	Args []string
+	// Master means ssh is expected to authenticate and fork to the
+	// background rather than hand over a shell: success is ssh exiting 0.
+	Master bool
+}
+
 // Start launches ssh for alias with a pty of the given size.
-func Start(alias string, cols, rows int) (*Session, error) {
+func Start(alias string, cols, rows int, opts Options) (*Session, error) {
 	logFile, err := os.CreateTemp("", "berth-ssh-*.log")
 	if err != nil {
 		return nil, err
 	}
 	logFile.Close()
 	args := append([]string{"-v", "-E", logFile.Name()}, Args()...)
+	args = append(args, opts.Args...)
 	cmd := exec.Command(SSH, append(args, "--", alias)...)
 	cmd.Env = os.Environ()
 	ws := &pty.Winsize{Cols: uint16(max(cols, 20)), Rows: uint16(max(rows, 5))}
@@ -134,6 +145,7 @@ func Start(alias string, cols, rows int) (*Session, error) {
 		Alias:   alias,
 		Events:  make(chan Event, 64),
 		Started: time.Now(),
+		master:  opts.Master,
 		cmd:     cmd,
 		pty:     ptmx,
 		logPath: logFile.Name(),
@@ -217,7 +229,11 @@ func (s *Session) readPty() {
 		if msg == "" {
 			msg = fmt.Sprintf("ssh exited (code %d)", s.exitCode)
 		}
-		s.emit(Event{Kind: EvExit, Code: s.exitCode, Err: errors.New(msg)})
+		var exitErr error
+		if !(s.master && s.exitCode == 0 && lastErr == "") {
+			exitErr = errors.New(msg)
+		}
+		s.emit(Event{Kind: EvExit, Code: s.exitCode, Err: exitErr})
 	}
 	close(s.done)
 	os.Remove(s.logPath)
@@ -279,7 +295,7 @@ func (s *Session) ttyLine(line string) {
 		}
 		authed, ready := s.authed, s.ready
 		s.mu.Unlock()
-		if authed && !ready {
+		if authed && !ready && !s.master {
 			s.markReady()
 			return
 		}
@@ -388,6 +404,7 @@ var (
 	reMuxTry      = regexp.MustCompile(`^debug1: auto-mux: Trying existing master`)
 	reMuxSession  = regexp.MustCompile(`^debug1: mux_client_request_session: master session id: \d+`)
 	reNextMethod  = regexp.MustCompile(`^debug1: Next authentication method: (password|keyboard-interactive)`)
+	reForked      = regexp.MustCompile(`^debug1: forking to background`)
 	reTryingKey   = regexp.MustCompile(`^debug1: Trying private key: `)
 	rePQ          = regexp.MustCompile(`^\*\* WARNING: connection is not using a post-quantum`)
 	reDebug       = regexp.MustCompile(`^debug\d: `)
@@ -438,7 +455,14 @@ func (s *Session) logLine(line string) {
 	s.mu.Unlock()
 	switch {
 	case reInteractive.MatchString(line):
+		if s.master {
+			// -N -f: no shell to hand over. ssh has already forked by now
+			// (it logs that first) and is about to exit 0.
+			return
+		}
 		s.markReady()
+	case reForked.MatchString(line):
+		s.emit(Event{Kind: EvStep, Step: StepSession, Text: "master in the background", Done: true})
 	case reMuxTry.MatchString(line):
 		s.emit(Event{Kind: EvStep, Step: StepConnect, Text: "reusing the open connection", Done: true})
 		s.emit(Event{Kind: EvStep, Step: StepHostKey, Text: "host key verified earlier", Done: true})

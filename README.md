@@ -121,6 +121,7 @@ berth -config FILE       # another ssh_config, used for listing and connecting (
 | `o` | jump to the host's open session |
 | `a` · `e` · `d` | add · edit · delete a stanza |
 | `E` | open the config in `$VISUAL` (or `$EDITOR`) at the selected host |
+| `M` · `X` · `Y` | open a control master socket · close it · copy `ssh -S <socket> <alias>` |
 | `i` | install `xterm-ghostty` terminfo on the host |
 | `y` | copy `ssh <alias>` to the clipboard (OSC 52, works through a multiplexer) |
 | `/` | filter by alias, target, `#tag` or comment |
@@ -128,7 +129,7 @@ berth -config FILE       # another ssh_config, used for listing and connecting (
 | `r` | reload the file and re-probe |
 | `?` | help |
 
-`● up  ○ unreachable  ↗ behind a jump host  ⧉ open sessions  ⎘ from an included file`
+`● up  ○ unreachable  ↗ behind a jump host  ⧉ open sessions  ⌁ control socket  ⎘ from an included file`
 
 ### The connection screen
 
@@ -184,6 +185,17 @@ re-add` after each save so your dotfiles source does not drift.
 Hosts from `Include`d files are listed and connectable but read-only.
 Stanzas made only of wildcards (`Host *`) show as *defaults* and open in
 `$EDITOR`.
+
+### Control sockets
+
+`M` opens a control master for the selected host: `ssh -M -S <socket> -f -N`
+through the same connection screen, so the YubiKey touch or PIN is asked
+once, and ssh stays in the background. The socket defaults to
+`/tmp/ssh-<alias>` and can be changed before opening. A host with a live
+socket shows `⌁`; `Y` copies `ssh -S <socket> <alias>` for a tool or an
+agent to ride the connection without authenticating again, and `X` closes
+the master (`-O exit`). Berth's default socket path is probed at start, so a
+master left by an earlier run is picked up.
 
 ### Environments: never mistake prod for staging
 
