@@ -73,7 +73,7 @@ func (c *Client) OpenSign(over Pane, command string, w, h int) (int, error) {
 	}
 	c.Cmd(map[string]any{"cmd": "set-purpose", "target": "pane", "id": id, "purpose": SignPurpose})
 	// One cell of air between the float and the pane's own frame.
-	x := over.X + over.W - w - 2
+	x := over.X + over.W - w - 3
 	y := over.Y + over.H - h - 2
 	if x < over.X {
 		x = over.X
