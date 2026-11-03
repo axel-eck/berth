@@ -72,8 +72,9 @@ func (c *Client) OpenSign(over Pane, command string, w, h int) (int, error) {
 		return 0, errors.New("slosh new-float: no id")
 	}
 	c.Cmd(map[string]any{"cmd": "set-purpose", "target": "pane", "id": id, "purpose": SignPurpose})
-	x := over.X + over.W - w - 1
-	y := over.Y + over.H - h - 1
+	// One cell of air between the float and the pane's own frame.
+	x := over.X + over.W - w - 2
+	y := over.Y + over.H - h - 2
 	if x < over.X {
 		x = over.X
 	}
