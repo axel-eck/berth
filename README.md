@@ -19,6 +19,8 @@
 
 <p align="center"><b>The SSH client you wanted on the desktop, living in your terminal, with no config of its own.</b></p>
 
+<p align="center"><img src="demo/demo.gif" alt="berth: browsing hosts, editing a stanza, connecting through the connection screen" width="900"></p>
+
 Berth is a host list over `~/.ssh/config`: pick a host, see what `ssh` will
 *actually* do for it, connect through a clean connection screen, and keep
 every session as a pane of your multiplexer. No database, no import, no

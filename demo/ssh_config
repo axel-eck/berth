@@ -1,0 +1,36 @@
+# A fictional ssh_config for the demo GIF. Run berth from this directory:
+#   berth -config ssh_config
+Host *
+	UserKnownHostsFile known_hosts
+	LogLevel ERROR
+
+# the demo box: a disposable sshd in docker
+Host web-1
+	# tags: prod
+	HostName 127.0.0.1
+	Port 2222
+	User deploy
+	IdentityFile keys/demo_ed25519
+	IdentitiesOnly yes
+	IdentityAgent none
+
+Host db-1
+	# tags: prod
+	HostName 203.0.113.11
+	User deploy
+	ProxyJump bastion
+
+Host nas
+	# tags: homelab
+	HostName 192.168.1.20
+	User admin
+
+Host pi
+	# tags: homelab
+	HostName 192.168.1.21
+	User pi
+	SetEnv TERM=xterm-256color
+
+Host bastion
+	HostName bastion.example.org
+	User ops

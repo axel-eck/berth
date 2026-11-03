@@ -102,6 +102,7 @@ type Session struct {
 	secretArmed  bool
 	hostKeyAsked bool
 	logRemoved   bool
+	swallow      string    // the echo of an answer just typed, not session output
 	out          io.Writer // set by the proxy: pty output goes here from then on
 	pending      []byte    // pty output read before the proxy attached
 	partial      string    // an incomplete tty line, which may be a prompt
@@ -148,6 +149,7 @@ func (s *Session) Answer(text string) {
 	s.mu.Lock()
 	s.partial, s.context = "", nil
 	s.secretArmed, s.hostKeyAsked = false, false
+	s.swallow = text
 	s.mu.Unlock()
 	s.pty.Write([]byte(text + "\n"))
 }
@@ -261,9 +263,15 @@ func (s *Session) ttyLine(line string) {
 	case strings.Contains(line, "Permission denied, please try again"):
 		s.emit(Event{Kind: EvNote, Text: "wrong answer, ssh asks again", Warn: true})
 	default:
+		s.mu.Lock()
+		if s.swallow != "" && line == s.swallow {
+			// The tty echoing what Answer typed.
+			s.swallow = ""
+			s.mu.Unlock()
+			return
+		}
 		// Not one of ssh's own lines, so it is a banner or the first remote
 		// output: keep it for the session screen as well as the card.
-		s.mu.Lock()
 		s.pending = append(s.pending, []byte(line+"\r\n")...)
 		s.context = append(s.context, line)
 		if len(s.context) > 12 {
@@ -293,7 +301,14 @@ func (s *Session) markReady() {
 }
 
 // ttyPrompt recognises a question ssh left on the line without a newline.
-func (s *Session) ttyPrompt(rest string) {
+func (s *Session) ttyPrompt(rest string) { s.promptAttempt(rest, 0) }
+
+// promptAttempt believes a prompt only once the log has shown ssh is at
+// that point. The pty and the log are read independently, so the question
+// can land a few milliseconds before its log line: wait a little and look
+// again, as long as the line is still sitting there unanswered. Only when
+// the log never backs it up is it shown as text the remote printed.
+func (s *Session) promptAttempt(rest string, tries int) {
 	rest = strings.TrimRight(rest, " ")
 	if rest == "" {
 		return
@@ -302,13 +317,29 @@ func (s *Session) ttyPrompt(rest string) {
 	ctx := append([]string(nil), s.context...)
 	armed, asked, authed := s.secretArmed, s.hostKeyAsked, s.authed
 	s.mu.Unlock()
+	later := func() bool {
+		if authed || tries >= 15 {
+			return false
+		}
+		time.AfterFunc(60*time.Millisecond, func() {
+			s.mu.Lock()
+			same := strings.TrimRight(s.partial, " ") == rest
+			s.mu.Unlock()
+			if same {
+				s.promptAttempt(rest, tries+1)
+			}
+		})
+		return true
+	}
+	note := func() { s.emit(Event{Kind: EvNote, Text: strings.TrimSpace(rest), Warn: true}) }
 	secret := func(text, detail string, warn bool) {
 		if authed || !armed {
-			// Not a point where ssh asks for a secret: show it as text the
-			// remote printed, never as a field.
-			s.emit(Event{Kind: EvNote, Text: strings.TrimSpace(rest), Warn: true})
+			if !later() {
+				note()
+			}
 			return
 		}
+		s.forgetContext()
 		s.emit(Event{Kind: EvPrompt, Step: StepAuth, Text: text, Detail: detail, Secret: true, Warn: warn, Context: ctx})
 	}
 	switch {
@@ -323,11 +354,22 @@ func (s *Session) ttyPrompt(rest string) {
 		secret("password", m[1], true)
 	case reHostAsk.MatchString(rest):
 		if !asked || authed {
-			s.emit(Event{Kind: EvNote, Text: strings.TrimSpace(rest), Warn: true})
+			if !later() {
+				note()
+			}
 			return
 		}
+		s.forgetContext()
 		s.emit(Event{Kind: EvPrompt, Step: StepHostKey, Text: "trust this host key?", Choice: true, Context: ctx})
 	}
+}
+
+// forgetContext drops the lines that led up to a prompt from the session
+// replay: the card shows them with the question, the shell need not.
+func (s *Session) forgetContext() {
+	s.mu.Lock()
+	s.pending = nil
+	s.mu.Unlock()
 }
 
 var (
