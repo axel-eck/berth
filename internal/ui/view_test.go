@@ -189,6 +189,38 @@ func TestSplashRendersOnGrid(t *testing.T) {
 	}
 }
 
+func TestEnvironmentFromTagsAndComment(t *testing.T) {
+	m := load(t, 100, 24)
+	pve := m.byAlias("pve")
+	if pve.env() != nil {
+		t.Fatalf("homelab is not an environment")
+	}
+	pve.Block.SetTags([]string{"production", "homelab"})
+	pve.Tags = pve.Block.Tags()
+	if e := pve.env(); e == nil || e.Name != "prod" {
+		t.Fatalf("a production tag should mean prod, got %v", e)
+	}
+	setEnvComment(pve.Block, "staging")
+	if e := pve.env(); e == nil || e.Name != "staging" {
+		t.Fatalf("an explicit # env: wins over tags, got %v", e)
+	}
+	if !strings.Contains(pve.Block.File.Content(), "\t# env: staging\n") {
+		t.Fatalf("env comment not written:\n%s", pve.Block.File.Content())
+	}
+	setEnvComment(pve.Block, "")
+	if strings.Contains(pve.Block.File.Content(), "env:") {
+		t.Fatal("env comment not removed")
+	}
+	m.refilter()
+	assertGrid(t, "list-with-env", m)
+	m.conn = newConnect("pve", m.pal)
+	m.mode = modeConnect
+	assertGrid(t, "card-with-env", m)
+	if !strings.Contains(ansi.Strip(m.View().Content), "PROD · pve") {
+		t.Fatal("the connection card should carry the environment in its title")
+	}
+}
+
 func TestFilterNarrowsAndEscClears(t *testing.T) {
 	m := press(load(t, 100, 24), "/", "o", "m", "n")
 	if m.current() == nil || m.current().Alias != "omni" {

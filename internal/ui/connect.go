@@ -173,7 +173,11 @@ func (m Model) connectLines(w int) []string {
 	h := m.byAlias(c.alias)
 	lines = append(lines, "")
 	if h != nil {
-		lines = append(lines, "  "+lipgloss.NewStyle().Bold(true).Render(h.target()))
+		head := lipgloss.NewStyle().Bold(true).Render(h.target())
+		if e := h.env(); e != nil {
+			head = lipgloss.NewStyle().Foreground(e.Color).Bold(true).Reverse(true).Render(" "+e.Label+" ") + "  " + head
+		}
+		lines = append(lines, "  "+head)
 		var meta []string
 		if h.Comment != "" {
 			meta = append(meta, h.Comment)
@@ -292,7 +296,15 @@ func (m Model) updateConnect(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case session.EvReady:
 			c.handedOff = true
 			sess, started := c.sess, c.sess.Started
-			return m, tea.Exec(sess.Proxy(m.slosh != nil), func(error) tea.Msg {
+			var cue *session.Cue
+			if e := m.envOf(c.alias); e != nil {
+				cue = &session.Cue{Label: e.Label, Hex: e.Hex, Bg: e.Bg}
+				if m.slosh != nil {
+					// The pane's title says it too, from every other tab.
+					m.slosh.SetPaneName(m.paneID, e.Label+" · "+c.alias)
+				}
+			}
+			return m, tea.Exec(sess.Proxy(m.slosh != nil, cue), func(error) tea.Msg {
 				return sessionEndedMsg{sess.Alias, time.Since(started).Round(time.Second), sess.ExitCode()}
 			})
 		case session.EvExit:
@@ -308,6 +320,9 @@ func (m Model) updateConnect(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, waitEventCmd(c.sess)
 	case sessionEndedMsg:
+		if m.slosh != nil && m.envOf(msg.alias) != nil {
+			m.slosh.SetPaneName(m.paneID, "")
+		}
 		if m.exitAfter {
 			// Keep the card up for the last frame rather than flashing the list.
 			m.summary = fmt.Sprintf("berth: %s · %s", msg.alias, msg.elapsed)
@@ -408,6 +423,14 @@ func (m Model) Summary() string {
 		return m.summary
 	}
 	return ""
+}
+
+// envOf is the environment of a host by alias, nil when unknown.
+func (m Model) envOf(alias string) *environment {
+	if h := m.byAlias(alias); h != nil {
+		return h.env()
+	}
+	return nil
 }
 
 // agentName says which agent will be asked to approve, from the host's

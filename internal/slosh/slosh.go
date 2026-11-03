@@ -220,6 +220,13 @@ func (c *Client) Focus(p Pane) error {
 	return err
 }
 
+// SetPaneName overrides a pane's title (0: the focused pane); "" hands the
+// title back to the program.
+func (c *Client) SetPaneName(id int, name string) error {
+	_, err := c.Cmd(map[string]any{"cmd": "set-name", "target": "pane", "id": id, "name": name})
+	return err
+}
+
 // Notify puts a line in the session's status area.
 func (c *Client) Notify(text string) {
 	c.Cmd(map[string]any{"cmd": "notify", "text": text})

@@ -402,7 +402,11 @@ func (b *Block) Set(key, value string) {
 	b.Append(key, value)
 }
 
+// Reparse rebuilds the block index after a caller edited Lines directly.
+func (f *File) Reparse() { f.reparse() }
+
 // Append adds a directive at the end of the stanza even if the key exists.
+// An empty value appends key alone, which is how a comment line is added.
 func (b *Block) Append(key, value string) {
 	f := b.File
 	at := b.HeadLine + 1
@@ -410,6 +414,9 @@ func (b *Block) Append(key, value string) {
 		at = ds[len(ds)-1].Line + 1
 	}
 	line := b.indent() + key + " " + value
+	if value == "" {
+		line = b.indent() + key
+	}
 	f.Lines = append(f.Lines[:at], append([]string{line}, f.Lines[at:]...)...)
 	f.reparse()
 }
