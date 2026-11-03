@@ -730,7 +730,10 @@ func (p *Proxy) Run() error {
 	if p.inSlosh && p.cue != nil {
 		// Needs in_band_shaders in the slosh config; refused otherwise, and
 		// the reply (ok or error) is swallowed either way.
-		fmt.Fprintf(p.out, "\x1b]5577;1;shader;chrome;tint color=\"%s\" amount=230\x1b\\", p.cue.Hex)
+		// Only the foreground channel: the frame's lines and title take the
+		// colour, the background stays the theme's, so it reads as a border
+		// rather than a bar (what slosh's bell does too).
+		fmt.Fprintf(p.out, "\x1b]5577;1;shader;chrome;tint color=\"%s\" amount=235 channel=\"fg\"\x1b\\", p.cue.Hex)
 		p.drainReply(cr, 250*time.Millisecond)
 		tinted = true
 	}
