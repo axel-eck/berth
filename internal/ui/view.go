@@ -65,6 +65,9 @@ func (m Model) render() string {
 		case m.mode == modeForm && m.form != nil:
 			title, lines = m.formLines(detailW - 4)
 			focused = true
+		case m.mode == modeSocket:
+			title, lines = m.socketLines(detailW - 4)
+			focused = true
 		default:
 			title, lines = m.detailLines(detailW - 4)
 		}
@@ -232,6 +235,9 @@ func (m Model) row(h *Host, selected bool, aliasW, w int) string {
 	if n := len(m.sessions[h.Alias]); n > 0 {
 		extras = append(extras, fmt.Sprintf("⧉%d", n))
 	}
+	if _, up := m.sockets[h.Alias]; up {
+		extras = append(extras, "⌁")
+	}
 	if h.ReadOnly {
 		extras = append(extras, "⎘")
 	}
@@ -325,6 +331,11 @@ func (m Model) detailLines(w int) (string, []string) {
 			lines = append(lines, label("term")+t+m.st.muted.Render("  override · i installs xterm-ghostty there"))
 		}
 		lines = append(lines, label("reach")+m.reachText(h))
+		if p, up := m.sockets[h.Alias]; up {
+			lines = append(lines, label("socket")+m.st.ok.Render("⌁ "+p)+m.st.muted.Render("  Y copies ssh -S … · X closes"))
+		} else {
+			lines = append(lines, label("socket")+m.st.muted.Render("none · M opens a control master"))
+		}
 		if m.slosh != nil {
 			panes := m.sessions[h.Alias]
 			switch len(panes) {
@@ -385,6 +396,27 @@ func (m Model) reachText(h *Host) string {
 	return m.st.muted.Render("…")
 }
 
+// socketLines asks where the control socket should live.
+func (m Model) socketLines(w int) (string, []string) {
+	h := m.current()
+	alias := ""
+	if h != nil {
+		alias = h.Alias
+	}
+	m.socketInput.SetWidth(max(10, w-4))
+	return "control master · " + alias, []string{
+		"",
+		"  ssh authenticates once, then stays in the background as a",
+		"  master. Anything run with " + m.st.hint.Render("ssh -S <socket> "+alias) + " rides it,",
+		"  no touch or PIN again.",
+		"",
+		"  " + m.st.muted.Render("socket"),
+		"  " + m.socketInput.View(),
+		"",
+		"  " + m.st.accent.Render("enter") + m.st.muted.Render(" open   ") + m.st.accent.Render("esc") + m.st.muted.Render(" cancel"),
+	}
+}
+
 func (m Model) formLines(w int) (string, []string) {
 	f := m.form
 	title := "new host"
@@ -436,6 +468,8 @@ func (m Model) footer() string {
 		if m.conn != nil && m.conn.failed != "" {
 			left = k("enter", "retry") + "  " + k("esc", "back")
 		}
+	case modeSocket:
+		left = k("enter", "open") + "  " + k("esc", "cancel")
 	case modeForm:
 		left = strings.Join([]string{k("enter", "next"), k("ctrl+s", "save"), k("←→", "choose"), k("esc", "cancel")}, "  ")
 	default:
@@ -443,7 +477,7 @@ func (m Model) footer() string {
 		if m.slosh != nil {
 			hints = append(hints, k("t", "tab"), k("s", "split"), k("v", "vsplit"), k("f", "float"), k("o", "jump"))
 		}
-		hints = append(hints, k("a", "add"), k("e", "edit"), k("d", "del"), k("#", "groups"), k("i", "terminfo"), k("y", "yank"), k("/", "filter"))
+		hints = append(hints, k("M", "socket"), k("a", "add"), k("e", "edit"), k("d", "del"), k("#", "groups"), k("i", "terminfo"), k("y", "yank"), k("/", "filter"))
 		// Drop hints from the end until the row fits, keeping `? help` last.
 		avail := m.width - lipgloss.Width(m.pal.Name) - 8
 		for len(hints) > 1 && lipgloss.Width(strings.Join(hints, "  ")) > avail {
@@ -520,6 +554,7 @@ func helpLines(st styles, inSlosh bool, cfg string) []string {
 	lines = append(lines,
 		k("a / e / d", "add / edit / delete a host in "+cfg),
 		k("E", "open "+cfg+" in $VISUAL or $EDITOR at this host"),
+		k("M / X / Y", "open a control master socket / close it / copy `ssh -S <socket> <alias>`"),
 		k("i", "install xterm-ghostty terminfo on the host"),
 		k("y", "copy `ssh <alias>` to the clipboard"),
 		k("/", "filter by alias, target, #tag or comment"),
@@ -527,7 +562,7 @@ func helpLines(st styles, inSlosh bool, cfg string) []string {
 		k("r", "reload the file and re-probe"),
 		k("q", "quit"),
 		"",
-		st.muted.Render("● up  ○ unreachable  ↗ behind a jump  ⧉ open sessions  ⎘ included file"),
+		st.muted.Render("● up  ○ unreachable  ↗ behind a jump  ⧉ open sessions  ⌁ control socket  ⎘ included file"),
 	)
 	return lines
 }

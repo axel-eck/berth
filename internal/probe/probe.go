@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -83,3 +84,28 @@ func Reach(host, port string, timeout time.Duration) (time.Duration, error) {
 	conn.Close()
 	return time.Since(start), nil
 }
+
+// MasterArgs are the ssh arguments for a control master on socket path:
+// authenticate, fork to the background, no command.
+func MasterArgs(path string) []string { return []string{"-M", "-S", path, "-f", "-N"} }
+
+// SocketUp asks the master behind path whether it is alive. No network.
+func SocketUp(alias, path string) bool {
+	if _, err := os.Stat(path); err != nil {
+		return false
+	}
+	return exec.Command(SSH, Args("-S", path, "-O", "check", "--", alias)...).Run() == nil
+}
+
+// SocketClose asks the master behind path to exit.
+func SocketClose(alias, path string) error {
+	out, err := exec.Command(SSH, Args("-S", path, "-O", "exit", "--", alias)...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// DefaultSocket is where berth puts a host's control socket unless told
+// otherwise: the spelling tools commonly ask for.
+func DefaultSocket(alias string) string { return "/tmp/ssh-" + alias }

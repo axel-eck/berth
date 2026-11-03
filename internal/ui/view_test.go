@@ -221,6 +221,36 @@ func TestEnvironmentFromTagsAndComment(t *testing.T) {
 	}
 }
 
+func TestSocketPromptAndMasterCard(t *testing.T) {
+	m := load(t, 100, 24)
+	m = press(m, "M")
+	if m.mode != modeSocket || m.socketInput.Value() != "/tmp/ssh-pve" {
+		t.Fatalf("M should ask for a socket path prefilled with berth's default, got %q", m.socketInput.Value())
+	}
+	assertGrid(t, "socket-prompt", m)
+	m = press(m, "esc")
+	if m.mode != modeList {
+		t.Fatal("esc should leave the socket prompt")
+	}
+	m.conn = newMaster("pve", "/tmp/ssh-pve", m.pal)
+	m.mode = modeConnect
+	m.conn.apply(session.Event{Kind: session.EvStep, Step: session.StepSession, Text: "master in the background", Done: true})
+	assertGrid(t, "master-card", m)
+	if !strings.Contains(ansi.Strip(m.View().Content), "control master") {
+		t.Fatal("the card should say it is opening a control master")
+	}
+	// ssh exiting 0 is the success of a master: the socket is recorded.
+	next, _ := m.updateConnect(sessionEventMsg{session.Event{Kind: session.EvExit, Code: 0}})
+	m = next.(Model)
+	if m.mode != modeList || m.sockets["pve"] != "/tmp/ssh-pve" {
+		t.Fatalf("a master exiting 0 should record the socket, got mode %d sockets %v", m.mode, m.sockets)
+	}
+	assertGrid(t, "list-with-socket", m)
+	if !strings.Contains(ansi.Strip(m.View().Content), "⌁") {
+		t.Fatal("the list should mark a host with a live socket")
+	}
+}
+
 func TestFilterNarrowsAndEscClears(t *testing.T) {
 	m := press(load(t, 100, 24), "/", "o", "m", "n")
 	if m.current() == nil || m.current().Alias != "omni" {
