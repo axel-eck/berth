@@ -1,0 +1,217 @@
+<p align="center">
+<pre align="center">
+██████╗ ███████╗██████╗ ████████╗██╗  ██╗
+██╔══██╗██╔════╝██╔══██╗╚══██╔══╝██║  ██║
+██████╔╝█████╗  ██████╔╝   ██║   ███████║
+██╔══██╗██╔══╝  ██╔══██╗   ██║   ██╔══██║
+██████╔╝███████╗██║  ██║   ██║   ██║  ██║
+╚═════╝ ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝
+      ~  ~~   ~   ssh, moored in ~/.ssh/config   ~   ~~  ~
+</pre>
+</p>
+
+<p align="center">
+<a href="https://go.dev"><img alt="Go 1.27+" src="https://img.shields.io/badge/Go-1.27%2B-00ADD8?logo=go&logoColor=white"></a>
+<a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-8aadf4"></a>
+<img alt="macOS · Linux" src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux-terminal-2e3440">
+<a href="https://sl0p.foo"><img alt="slosh" src="https://img.shields.io/badge/pairs%20with-slosh%20%C2%B7%20Ghostty-ff5fd7"></a>
+</p>
+
+<p align="center"><b>The SSH client you wanted on the desktop, living in your terminal, with no config of its own.</b></p>
+
+Berth is a host list over `~/.ssh/config`: pick a host, see what `ssh` will
+*actually* do for it, connect through a clean connection screen, and keep
+every session as a pane of your multiplexer. No database, no import, no
+second file to keep in sync. Your `ssh_config` is the only source of truth,
+and berth edits it in place without touching a byte it does not understand.
+
+```
+╭─ berth ──────────────────────────────╮ ╭─ web-1 ─────────────────────────────────────────╮
+│ / filter                             │ │ web-1                                           │
+│                                      │ │ deploy@203.0.113.10                             │
+│ ▾ #prod  2                           │ │ #prod                                           │
+│   ● web-1   deploy@203.0.113.10      │ │                                                 │
+│   ● db-1    deploy@203.0.113.11 ⧉1   │ │ auth     1Password agent · id_ed25519_sk as f…  │
+│ ▾ #homelab  2                        │ │ term     xterm-256color  override · i installs… │
+│   ● nas     admin@192.168.1.20       │ │ reach    ● up  18ms to 203.0.113.10:22          │
+│   ○ pi      pi@192.168.1.21          │ │ sessions none open · t s v f open one           │
+│ ▾ untagged  1                        │ │                                                 │
+│   ● bastion ops@bastion.example.org  │ │ ~/.ssh/config:14                                │
+│ ▾ defaults  1                        │ │ Host web-1                                      │
+│   · *       defaults                 │ │     HostName 203.0.113.10                       │
+╰──────────────────────────────────────╯ ╰─────────────────────────────────────────────────╯
+ enter connect  t tab  s split  v vsplit  f float  o jump  a add  e edit  d del  # groups  …
+```
+
+## Why
+
+- **One file.** Desktop SSH clients keep their own host database next to the
+  `ssh_config` you already maintain. Berth reads yours, and writes back only
+  the stanza you edited, with its indentation, comments and everything else
+  left byte for byte.
+- **Keys and agents, never passwords.** 1Password, a YubiKey, an agent, a key
+  file: berth names which one will answer, and the connection screen tells
+  you when to touch or approve.
+- **Built for a multiplexer.** Inside [slosh](https://sl0p.foo) a host opens
+  as a tab, a split or a float; berth counts the open sessions per host,
+  jumps to them, and wears slosh's theme, following it live.
+
+## What it does
+
+- **Reads your real config.** Every `Host` stanza, `Include`d files, tags
+  from a `# tags:` comment, and the *effective* values from `ssh -G`: user,
+  port, jump host, forwards, and which key or agent will answer.
+- **Shows the auth story in plain words**: `1Password agent`, `YubiKey ·
+  id_ed25519_sk`, `key file · deploy_key`, or what your `Host *` inherits.
+- **Probes reachability** with a TCP dial, no key and no touch involved.
+  Hosts behind a `ProxyJump` or `ProxyCommand` are not dialled at all.
+- **Connects on its own screen.** The host, then four steps with what is
+  really going on: `touch your YubiKey`, `approve in 1Password`, a host key
+  fingerprint to accept, a masked PIN field. Warnings such as a missing
+  post-quantum key exchange are one line, not three. Then the terminal is
+  handed over untouched, on a blank screen.
+- **Lives in your multiplexer.** Inside [slosh](https://sl0p.foo) a host opens
+  as a new tab, a split or a float; berth counts open sessions per host and
+  jumps to them. It wears slosh's current theme, and follows it live.
+- **Edits `~/.ssh/config` surgically.** Add, edit and delete stanzas from a
+  form; only the lines you changed are rewritten, with the stanza's own
+  indentation. Comments, blank lines, `Match` blocks and directives berth
+  does not know about survive byte for byte.
+- **Helps with Ghostty.** One key installs `xterm-ghostty` terminfo on a host
+  and offers to drop the `SetEnv TERM=xterm-256color` workaround.
+
+## Install
+
+```sh
+go install github.com/axel-eck/berth@latest
+```
+
+Needs Go 1.27+ to build, OpenSSH 8.2+ at runtime, and a Unix-like system
+(macOS, Linux). slosh and Ghostty are optional: without them berth is still a
+complete client, it just loses the pane spawning and theme sync.
+
+> **macOS and security keys.** Apple's `/usr/bin/ssh` is built without FIDO
+> support, so it cannot use `*_sk` (YubiKey) keys. Install OpenSSH from
+> Homebrew and keep it first on your `PATH`; berth uses the `ssh` your shell
+> would, and carries it into every pane it spawns.
+
+## Use
+
+```sh
+berth                    # the host list
+berth connect <alias>    # one session, then exit (what spawned panes run)
+berth ls                 # aliases, one per line, for scripts and fzf
+berth -config FILE       # another ssh_config, used for listing and connecting (-F)
+```
+
+`BERTH_SPLASH=0` skips the greeting animation.
+
+### Keys
+
+| key | does |
+|---|---|
+| `enter` | connect here; the list comes back when the session ends |
+| `t` · `s` · `v` · `f` | open in a new slosh tab · split below · split beside · float |
+| `o` | jump to the host's open session |
+| `a` · `e` · `d` | add · edit · delete a stanza |
+| `E` | open the config in `$VISUAL` (or `$EDITOR`) at the selected host |
+| `i` | install `xterm-ghostty` terminfo on the host |
+| `y` | copy `ssh <alias>` to the clipboard (OSC 52, works through a multiplexer) |
+| `/` | filter by alias, target, `#tag` or comment |
+| `#` | group hosts under their first tag; `space` on a header folds it |
+| `r` | reload the file and re-probe |
+| `?` | help |
+
+`● up  ○ unreachable  ↗ behind a jump host  ⧉ open sessions  ⎘ from an included file`
+
+### The connection screen
+
+```
+╭─ db-1 ──────────────────────────────────────────────╮
+│                                                     │
+│   deploy@203.0.113.11                               │
+│   #prod · YubiKey · id_ed25519_sk                   │
+│                                                     │
+│   ✓ connected                                       │
+│   ✓ host key known  SHA256:nWMyJVx9zEGElfFCrw0Hok…  │
+│   ⠹ touch your YubiKey  ED25519-SK SHA256:FBzDGXx…  │
+│   · shell                                           │
+│                                                     │
+│   PIN · ED25519-SK id_ed25519_sk  ••••••            │
+│                                                     │
+│   server OpenSSH_9.9                                │
+│   ! no post-quantum key exchange: the server sho…   │
+│                                                     │
+│   4s · esc cancels                                  │
+╰─────────────────────────────────────────────────────╯
+```
+
+A failed connection stays on screen with the reason; `enter` retries. In a
+pane berth spawned, the pane closes when the session ends (or a few seconds
+after a failure), so dead panes do not pile up.
+
+### Editing
+
+The form has alias, hostname, user, port, jump host, an auth preset, key
+file, a TERM override and tags. Presets are plain directives:
+
+| preset | writes |
+|---|---|
+| inherit | nothing: your `Host *` defaults apply |
+| 1Password | `IdentityAgent` pointing at the 1Password socket |
+| YubiKey | `IdentityFile ~/.ssh/<key>_sk`, `IdentitiesOnly yes`, `IdentityAgent none` |
+| key file | `IdentityFile <path>`, `IdentitiesOnly yes`, `IdentityAgent none` |
+
+There is no password preset, and berth never stores a secret: a PIN or
+passphrase typed on the connection screen goes straight to ssh's tty and is
+cleared from the field. A secret field only appears when ssh's own log says
+ssh is asking; a remote banner that imitates a prompt is shown as text, with
+the lines before it, never as a field.
+
+Saves are atomic: a sibling temp file is written and fsynced, checked with
+`ssh -G -F` so a line ssh would refuse never lands, then renamed over the
+real file (the symlink target, if your config is a symlink into a dotfiles
+repo). A save is refused if the file changed on disk since it was loaded.
+If [chezmoi](https://www.chezmoi.io) manages the file, berth runs `chezmoi
+re-add` after each save so your dotfiles source does not drift.
+
+Hosts from `Include`d files are listed and connectable but read-only.
+Stanzas made only of wildcards (`Host *`) show as *defaults* and open in
+`$EDITOR`.
+
+### Tags and groups
+
+A `# tags: prod, eu` comment inside a stanza tags it. With any tag present
+the list groups hosts under their first tag, then `untagged`, then
+`defaults`. `#` switches to a flat list; `/#prod` filters by tag.
+
+## How it works
+
+Berth runs `ssh -v -E <tempfile> <alias>` inside a pty it owns. ssh's log
+(debug steps, warnings, `Permission denied`) goes to the temp file, which
+berth tails for progress; only genuine questions (host key, PIN, passphrase)
+and remote output reach the pty. When ssh logs `Entering interactive
+session` (or reuses a `ControlMaster` connection) berth puts the terminal in
+raw mode, replays whatever the remote already printed, and relays bytes both
+ways, resizing the pty on `SIGWINCH`, until ssh exits. The temp log is
+removed when the session ends.
+
+Inside slosh, sessions are spawned through the control socket as panes that
+were *given* `berth connect <alias>` as their command, carrying the purpose
+`berth:<alias>` so they can be found again. The palette comes from `slosh
+--dump-theme` plus the theme the session wears right now.
+
+## What berth touches
+
+- `~/.ssh/config` (or `-config`): read always, written only when you save a
+  form or delete a stanza, atomically with mode 0600.
+- A temp file for ssh's log during a connection, mode 0600, unlinked as soon
+  as ssh has it open.
+- TCP connections to each host's port for the reachability dot. Nothing is
+  sent on them, and hosts behind a jump host or `ProxyCommand` are skipped.
+- The slosh control socket, when running inside slosh.
+- `chezmoi re-add` on the config, only if chezmoi already manages it.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
