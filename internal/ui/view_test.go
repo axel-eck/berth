@@ -247,7 +247,8 @@ func TestAddHostWritesStanza(t *testing.T) {
 	}
 	m.form.apply(m.file)
 	got := m.file.Content()
-	want := "\nHost bastion\n\tHostName 10.9.9.9\n\tUser ops\n\tPort 2200\n\tIdentityAgent \"~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock\"\n"
+	// The socket path depends on the OS and on 1Password being installed.
+	want := "\nHost bastion\n\tHostName 10.9.9.9\n\tUser ops\n\tPort 2200\n\tIdentityAgent \"" + onePasswordSocket() + "\"\n"
 	if !strings.HasSuffix(got, want) {
 		t.Fatalf("stanza written:\n%s", got)
 	}
