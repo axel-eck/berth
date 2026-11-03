@@ -1,12 +1,15 @@
 package ui
 
 import (
+	"image/color"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+
+	"charm.land/lipgloss/v2"
 
 	"github.com/axel-eck/berth/internal/probe"
 	"github.com/axel-eck/berth/internal/sshconf"
@@ -122,6 +125,87 @@ func (h *Host) termOverride() string {
 }
 
 var skRe = regexp.MustCompile(`_sk(\.pub)?$`)
+
+// environment is what a host is for, so prod never looks like staging.
+// It is named by a `# env: prod` comment in the stanza, or read off the
+// tags; the colours are fixed on purpose, the same in every theme.
+type environment struct {
+	Name  string
+	Label string
+	Color color.Color
+	Hex   string // the colour slosh's frame tint takes
+	Bg    string // a terminal background tint for the session, "" for none
+}
+
+var environments = map[string]*environment{
+	"prod":    {Name: "prod", Label: "PROD", Color: lipgloss.Color("#ff4d4f"), Hex: "#ff4d4f", Bg: "#2b0b0b"},
+	"staging": {Name: "staging", Label: "STAGING", Color: lipgloss.Color("#f5a623"), Hex: "#f5a623", Bg: "#2a1d06"},
+	"dev":     {Name: "dev", Label: "DEV", Color: lipgloss.Color("#3ddc84"), Hex: "#3ddc84"},
+}
+
+// envNames maps the words people use for an environment onto one.
+var envNames = map[string]string{
+	"prod": "prod", "production": "prod", "prd": "prod", "live": "prod",
+	"staging": "staging", "stage": "staging", "stg": "staging", "preprod": "staging", "preproduction": "staging", "uat": "staging", "qa": "staging",
+	"dev": "dev", "development": "dev", "test": "dev", "testing": "dev", "local": "dev", "sandbox": "dev", "lab": "dev",
+}
+
+var envRe = regexp.MustCompile(`^\s*#\s*[Ee]nv(?:ironment)?\s*:\s*(\S+)`)
+
+// envComment is the explicit `# env:` value in the stanza, or "".
+func envComment(b *sshconf.Block) string {
+	for i := b.Start; i < b.End; i++ {
+		if m := envRe.FindStringSubmatch(b.File.Lines[i]); m != nil {
+			return strings.ToLower(m[1])
+		}
+	}
+	return ""
+}
+
+// env is the host's environment, or nil when nothing says.
+func (h *Host) env() *environment {
+	if h.Wildcard {
+		return nil
+	}
+	if v := envComment(h.Block); v != "" {
+		if e := environments[envNames[v]]; e != nil {
+			return e
+		}
+		return environments[v]
+	}
+	for _, t := range h.Tags {
+		if e := environments[envNames[strings.ToLower(t)]]; e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+// envOfTag colours a group header when the tag names an environment.
+func envOfTag(tag string) *environment {
+	return environments[envNames[strings.ToLower(tag)]]
+}
+
+// setEnvComment writes, rewrites or removes the `# env:` comment.
+func setEnvComment(b *sshconf.Block, env string) {
+	f := b.File
+	for i := b.Start; i < b.End; i++ {
+		if envRe.MatchString(f.Lines[i]) {
+			if env == "" {
+				f.Lines = append(f.Lines[:i], f.Lines[i+1:]...)
+			} else {
+				indent := regexp.MustCompile(`^\s*`).FindString(f.Lines[i])
+				f.Lines[i] = indent + "# env: " + env
+			}
+			b.File.Reparse()
+			return
+		}
+	}
+	if env == "" {
+		return
+	}
+	b.Append("# env: "+env, "")
+}
 
 // existingKeys filters ssh -G's identityfile list (which includes every
 // default name) down to the files that are actually on disk.

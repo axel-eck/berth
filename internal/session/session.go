@@ -453,7 +453,13 @@ func (s *Session) logLine(line string) {
 		m := reConnecting.FindStringSubmatch(line)
 		s.emit(Event{Kind: EvStep, Step: StepConnect, Text: "connecting to " + m[2] + ":" + m[3]})
 	case reJump.MatchString(line):
-		s.emit(Event{Kind: EvStep, Step: StepConnect, Text: "through jump host", Detail: reJump.FindStringSubmatch(line)[1]})
+		// The implicit ProxyCommand ends with the jump host's name.
+		fields := strings.Fields(reJump.FindStringSubmatch(line)[1])
+		jump := ""
+		if len(fields) > 0 {
+			jump = fields[len(fields)-1]
+		}
+		s.emit(Event{Kind: EvStep, Step: StepConnect, Text: "through " + jump})
 	case reEstablished.MatchString(line):
 		s.emit(Event{Kind: EvStep, Step: StepConnect, Text: "connected", Done: true})
 	case reRemoteVer.MatchString(line):
@@ -574,19 +580,88 @@ func shortErr(err error) string {
 	return s
 }
 
+// Cue is how the session screen keeps saying which kind of host this is,
+// so a production shell never looks like a staging one. Inside slosh the
+// pane's frame is tinted and its status carries the label; elsewhere the
+// terminal background is tinted. All of it is undone when ssh exits.
+type Cue struct {
+	Label string // PROD, STAGING, ...
+	Hex   string // frame tint
+	Bg    string // terminal background tint, "" for none
+}
+
 // Proxy relays the terminal to the pty until ssh exits. It satisfies Bubble
 // Tea's ExecCommand so the program can release the terminal around it.
 // When inSlosh is set the pane's frame shows the host while connected.
-func (s *Session) Proxy(inSlosh bool) *Proxy {
-	return &Proxy{s: s, inSlosh: inSlosh, in: os.Stdin, out: os.Stdout}
+func (s *Session) Proxy(inSlosh bool, cue *Cue) *Proxy {
+	return &Proxy{s: s, inSlosh: inSlosh, cue: cue, in: os.Stdin, out: os.Stdout}
 }
 
 // Proxy is the handover phase of a Session.
 type Proxy struct {
 	s       *Session
 	inSlosh bool
+	cue     *Cue
 	in      io.Reader
 	out     io.Writer
+}
+
+// drainReply forwards what the user types while swallowing the one reply
+// slosh sends back for an in-band shader request, which would otherwise be
+// delivered to the remote shell as keystrokes.
+func (p *Proxy) drainReply(cr io.Reader, deadline time.Duration) {
+	type chunk struct {
+		b   []byte
+		err error
+	}
+	ch := make(chan chunk, 1)
+	go func() {
+		buf := make([]byte, 4096)
+		n, err := cr.Read(buf)
+		ch <- chunk{append([]byte(nil), buf[:n]...), err}
+	}()
+	var held []byte
+	timer := time.NewTimer(deadline)
+	defer timer.Stop()
+	for {
+		select {
+		case c := <-ch:
+			held = append(held, c.b...)
+			if c.err != nil {
+				p.s.pty.Write(stripReply(held))
+				return
+			}
+			if start := bytes.Index(held, []byte("\x1b]5577;")); start >= 0 {
+				if end := bytes.Index(held[start:], []byte("\x1b\\")); end >= 0 {
+					p.s.pty.Write(stripReply(held))
+					return
+				}
+			}
+			go func() {
+				buf := make([]byte, 4096)
+				n, err := cr.Read(buf)
+				ch <- chunk{append([]byte(nil), buf[:n]...), err}
+			}()
+		case <-timer.C:
+			p.s.pty.Write(stripReply(held))
+			return
+		}
+	}
+}
+
+// stripReply removes slosh OSC 5577 replies from typed input.
+func stripReply(b []byte) []byte {
+	for {
+		start := bytes.Index(b, []byte("\x1b]5577;"))
+		if start < 0 {
+			return b
+		}
+		end := bytes.Index(b[start:], []byte("\x1b\\"))
+		if end < 0 {
+			return b[:start]
+		}
+		b = append(b[:start:start], b[start+end+2:]...)
+	}
 }
 
 func (p *Proxy) SetStdin(r io.Reader)  { p.in = r }
@@ -618,9 +693,16 @@ func (p *Proxy) Run() error {
 		}
 	}()
 
+	status := "⇄ " + p.s.Alias
+	if p.cue != nil {
+		status = "⚠ " + p.cue.Label + " · " + p.s.Alias
+	}
 	if p.inSlosh {
-		fmt.Fprintf(p.out, "\x1b]5577;1;status;⇄ %s\x1b\\", p.s.Alias)
+		fmt.Fprintf(p.out, "\x1b]5577;1;status;%s\x1b\\", status)
 		defer fmt.Fprint(p.out, "\x1b]5577;1;clear\x1b\\")
+	} else if p.cue != nil && p.cue.Bg != "" {
+		fmt.Fprintf(p.out, "\x1b]11;%s\x1b\\", p.cue.Bg)
+		defer fmt.Fprint(p.out, "\x1b]111\x1b\\")
 	}
 
 	// Start the session on a blank screen: scroll whatever the pane showed
@@ -644,10 +726,30 @@ func (p *Proxy) Run() error {
 	if err != nil {
 		return err
 	}
+	tinted := false
+	if p.inSlosh && p.cue != nil {
+		// Needs in_band_shaders in the slosh config; refused otherwise, and
+		// the reply (ok or error) is swallowed either way.
+		// Only the foreground channel: the frame's lines and title take the
+		// colour, the background stays the theme's, so it reads as a border
+		// rather than a bar (what slosh's bell does too).
+		fmt.Fprintf(p.out, "\x1b]5577;1;shader;chrome;tint color=\"%s\" amount=235 channel=\"fg\"\x1b\\", p.cue.Hex)
+		p.drainReply(cr, 250*time.Millisecond)
+		tinted = true
+	}
 	go io.Copy(p.s.pty, cr)
 	<-p.s.done
 	cr.Cancel()
 	cr.Close()
+	if tinted {
+		fmt.Fprint(p.out, "\x1b]5577;1;shader;chrome;\x1b\\")
+		cr2, err := cancelreader.NewReader(p.in)
+		if err == nil {
+			p.drainReply(cr2, 250*time.Millisecond)
+			cr2.Cancel()
+			cr2.Close()
+		}
+	}
 	signal.Stop(winch)
 	close(winch)
 	return nil

@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/axel-eck/berth/internal/session"
+	"github.com/axel-eck/berth/internal/slosh"
 )
 
 type stepState int
@@ -173,7 +174,11 @@ func (m Model) connectLines(w int) []string {
 	h := m.byAlias(c.alias)
 	lines = append(lines, "")
 	if h != nil {
-		lines = append(lines, "  "+lipgloss.NewStyle().Bold(true).Render(h.target()))
+		head := lipgloss.NewStyle().Bold(true).Render(h.target())
+		if e := h.env(); e != nil {
+			head = lipgloss.NewStyle().Foreground(e.Color).Bold(true).Reverse(true).Render(" "+e.Label+" ") + "  " + head
+		}
+		lines = append(lines, "  "+head)
 		var meta []string
 		if h.Comment != "" {
 			meta = append(meta, h.Comment)
@@ -292,7 +297,18 @@ func (m Model) updateConnect(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case session.EvReady:
 			c.handedOff = true
 			sess, started := c.sess, c.sess.Started
-			return m, tea.Exec(sess.Proxy(m.slosh != nil), func(error) tea.Msg {
+			var cue *session.Cue
+			if e := m.envOf(c.alias); e != nil {
+				cue = &session.Cue{Label: e.Label, Hex: e.Hex, Bg: e.Bg}
+				if m.slosh != nil {
+					// The pane's title says it too, from every other tab.
+					m.slosh.SetPaneName(m.paneID, e.Label+" · "+c.alias)
+					if e.Name == "prod" {
+						m.signPane = m.openSign(e)
+					}
+				}
+			}
+			return m, tea.Exec(sess.Proxy(m.slosh != nil, cue), func(error) tea.Msg {
 				return sessionEndedMsg{sess.Alias, time.Since(started).Round(time.Second), sess.ExitCode()}
 			})
 		case session.EvExit:
@@ -308,6 +324,13 @@ func (m Model) updateConnect(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, waitEventCmd(c.sess)
 	case sessionEndedMsg:
+		if m.slosh != nil && m.envOf(msg.alias) != nil {
+			m.slosh.SetPaneName(m.paneID, "")
+		}
+		if m.signPane != 0 {
+			m.slosh.Close(m.signPane)
+			m.signPane = 0
+		}
 		if m.exitAfter {
 			// Keep the card up for the last frame rather than flashing the list.
 			m.summary = fmt.Sprintf("berth: %s · %s", msg.alias, msg.elapsed)
@@ -408,6 +431,44 @@ func (m Model) Summary() string {
 		return m.summary
 	}
 	return ""
+}
+
+// Sign float size, and the pane size that leaves room for it.
+const (
+	signW, signH       = 36, 15
+	signMinW, signMinH = 100, 26
+)
+
+// openSign floats the rotating warning sign in this pane's corner for a
+// production session, when the pane is wide enough to spare the corner.
+// Returns the float's pane id, or 0.
+func (m Model) openSign(e *environment) int {
+	var here slosh.Pane
+	var ok bool
+	if m.paneID != 0 {
+		here, ok = m.slosh.PaneByID(m.paneID)
+	} else {
+		var err error
+		here, err = m.slosh.Here()
+		ok = err == nil
+	}
+	if !ok || here.ContentW < signMinW || here.ContentH < signMinH {
+		return 0
+	}
+	cmd := fmt.Sprintf("%s sign --label %s --color %s --watch %d --self %%d", shq(berthExecutable()), shq(e.Label), shq(e.Hex), here.ID)
+	id, err := m.slosh.OpenSign(here, cmd, signW, signH)
+	if err != nil {
+		return 0
+	}
+	return id
+}
+
+// envOf is the environment of a host by alias, nil when unknown.
+func (m Model) envOf(alias string) *environment {
+	if h := m.byAlias(alias); h != nil {
+		return h.env()
+	}
+	return nil
 }
 
 // agentName says which agent will be asked to approve, from the host's

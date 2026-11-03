@@ -78,6 +78,7 @@ type Model struct {
 	connectOn  string // alias to connect to right away (berth connect <alias>)
 	exitAfter  bool   // quit when that session ends instead of showing the list
 	paneID     int    // the slosh pane to close when that happens
+	signPane   int    // the floating warning sign of the current session, if any
 	summary    string
 	form       *form
 	pending    *Host // the host a confirm modal is about

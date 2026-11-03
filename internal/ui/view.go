@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,7 +44,13 @@ func (m Model) render() string {
 	bodyH := m.height - 1
 	if m.mode == modeConnect && m.conn != nil {
 		w := min(m.width, 84)
-		card := m.frame(m.conn.alias, m.connectLines(w-4), w, min(bodyH, 26), true)
+		title := m.conn.alias
+		var border color.Color
+		if e := m.envOf(m.conn.alias); e != nil {
+			title = e.Label + " · " + m.conn.alias
+			border = e.Color
+		}
+		card := m.frameColored(title, m.connectLines(w-4), w, min(bodyH, 26), border)
 		body := lipgloss.Place(m.width, bodyH, lipgloss.Center, lipgloss.Center, card)
 		return body + "\n" + m.footer()
 	}
@@ -86,10 +93,19 @@ func (m Model) render() string {
 
 // frame draws a slosh-style rounded pane with the title in the top edge.
 func (m Model) frame(title string, lines []string, w, h int, focused bool) string {
-	inner := w - 2
-	bc, tc := m.pal.BorderIdle, m.st.titleIdle
+	bc := m.pal.BorderIdle
 	if focused {
-		bc, tc = m.pal.Border, m.st.title
+		bc = m.pal.Border
+	}
+	return m.frameColored(title, lines, w, h, bc)
+}
+
+// frameColored is frame with an explicit border colour (nil: idle).
+func (m Model) frameColored(title string, lines []string, w, h int, bc color.Color) string {
+	inner := w - 2
+	tc := m.st.titleIdle
+	if bc != nil && bc != m.pal.BorderIdle {
+		tc = lipgloss.NewStyle().Foreground(bc).Bold(true)
 	}
 	border := lipgloss.NewStyle()
 	if bc != nil {
@@ -186,7 +202,11 @@ func (m Model) headerRow(it item, selected bool, w int) string {
 	if selected {
 		return m.st.sel.Width(w).Render(plain)
 	}
-	return m.st.accent.Render(mark+" "+label) + m.st.muted.Render(fmt.Sprintf("  %d", it.count))
+	head := m.st.accent
+	if e := envOfTag(it.group); e != nil && groupRank(it.group) == 0 {
+		head = lipgloss.NewStyle().Foreground(e.Color).Bold(true)
+	}
+	return head.Render(mark+" "+label) + m.st.muted.Render(fmt.Sprintf("  %d", it.count))
 }
 
 func (m Model) row(h *Host, selected bool, aliasW, w int) string {
@@ -205,6 +225,10 @@ func (m Model) row(h *Host, selected bool, aliasW, w int) string {
 	}
 	alias := fit(h.Alias, aliasW)
 	var extras []string
+	var envBadge string
+	if e := h.env(); e != nil {
+		envBadge = e.Label
+	}
 	if n := len(m.sessions[h.Alias]); n > 0 {
 		extras = append(extras, fmt.Sprintf("⧉%d", n))
 	}
@@ -222,9 +246,16 @@ func (m Model) row(h *Host, selected bool, aliasW, w int) string {
 	if extra != "" {
 		targetW -= lipgloss.Width(extra) + 1
 	}
+	if envBadge != "" {
+		targetW -= lipgloss.Width(envBadge) + 1
+	}
 	target := fit(h.target(), max(targetW, 0))
 	if selected {
-		plain := dot + " " + alias + " " + target
+		plain := dot + " " + alias + " "
+		if envBadge != "" {
+			plain += envBadge + " "
+		}
+		plain += target
 		if extra != "" {
 			plain += " " + extra
 		}
@@ -234,7 +265,11 @@ func (m Model) row(h *Host, selected bool, aliasW, w int) string {
 	if h.Wildcard {
 		line += m.st.muted.Render(alias + " " + target)
 	} else {
-		line += alias + " " + m.st.muted.Render(target)
+		line += alias + " "
+		if e := h.env(); e != nil {
+			line += lipgloss.NewStyle().Foreground(e.Color).Bold(true).Render(envBadge) + " "
+		}
+		line += m.st.muted.Render(target)
 	}
 	if extra != "" {
 		line += " " + m.st.accent.Render(extra)
@@ -268,6 +303,13 @@ func (m Model) detailLines(w int) (string, []string) {
 	}
 	lines = append(lines, "")
 	if !h.Wildcard {
+		if e := h.env(); e != nil {
+			note := "  marked on the pane frame and title while connected"
+			if m.slosh == nil {
+				note = "  the terminal background is tinted while connected"
+			}
+			lines = append(lines, label("env")+lipgloss.NewStyle().Foreground(e.Color).Bold(true).Render(e.Label)+m.st.muted.Render(note))
+		}
 		lines = append(lines, label("auth")+h.authSummary())
 		if j := h.jump(); j != "" {
 			lines = append(lines, label("jump")+"via "+j)

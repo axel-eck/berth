@@ -21,13 +21,75 @@ type Client struct {
 
 // Pane is the subset of a `panes` entry berth cares about.
 type Pane struct {
-	ID      int    `json:"id"`
-	TabID   int    `json:"tab_id"`
-	Tab     int    `json:"tab"`
-	Title   string `json:"title"`
-	Purpose string `json:"purpose"`
-	Alive   bool   `json:"alive"`
-	Focused bool   `json:"focused"`
+	ID       int    `json:"id"`
+	TabID    int    `json:"tab_id"`
+	Tab      int    `json:"tab"`
+	Title    string `json:"title"`
+	Purpose  string `json:"purpose"`
+	Status   string `json:"status"`
+	Alive    bool   `json:"alive"`
+	Focused  bool   `json:"focused"`
+	Floating bool   `json:"floating"`
+	X        int    `json:"x"`
+	Y        int    `json:"y"`
+	W        int    `json:"w"`
+	H        int    `json:"h"`
+	ContentW int    `json:"content_w"`
+	ContentH int    `json:"content_h"`
+}
+
+// PaneByID looks one pane up.
+func (c *Client) PaneByID(id int) (Pane, bool) {
+	panes, err := c.Panes()
+	if err != nil {
+		return Pane{}, false
+	}
+	for _, p := range panes {
+		if p.ID == id {
+			return p, true
+		}
+	}
+	return Pane{}, false
+}
+
+// SignPurpose marks the floating pane that carries a session's warning
+// sign. It is not under the "berth:" prefix on purpose: Sessions must not
+// count it as a session.
+const SignPurpose = "berth-sign"
+
+// OpenSign floats a small pane in the bottom-right corner of over, runs
+// command in it (through the float's shell, the one way a float gets a
+// command), and gives focus back to over. command receives the float's own
+// pane id in place of %d, so the program can close its pane when done.
+func (c *Client) OpenSign(over Pane, command string, w, h int) (int, error) {
+	resp, err := c.Cmd(map[string]any{"cmd": "new-float"})
+	if err != nil {
+		return 0, err
+	}
+	idf, _ := resp["id"].(float64)
+	id := int(idf)
+	if id == 0 {
+		return 0, errors.New("slosh new-float: no id")
+	}
+	c.Cmd(map[string]any{"cmd": "set-purpose", "target": "pane", "id": id, "purpose": SignPurpose})
+	// One cell of air between the float and the pane's own frame.
+	x := over.X + over.W - w - 3
+	y := over.Y + over.H - h - 2
+	if x < over.X {
+		x = over.X
+	}
+	if y < over.Y {
+		y = over.Y
+	}
+	c.Cmd(map[string]any{"cmd": "float", "id": id, "x": x, "y": y, "w": w, "h": h})
+	c.Cmd(map[string]any{"cmd": "focus", "id": id})
+	line := "exec " + fmt.Sprintf(command, id) + "\n"
+	if _, err := c.Cmd(map[string]any{"cmd": "raw", "data": line}); err != nil {
+		c.Close(id)
+		return 0, err
+	}
+	c.Cmd(map[string]any{"cmd": "focus", "id": over.ID})
+	return id, nil
 }
 
 // Detect returns a client when the process sits in a slosh pane.
@@ -217,6 +279,13 @@ func (c *Client) Focus(p Pane) error {
 		return err
 	}
 	_, err := c.Cmd(map[string]any{"cmd": "focus", "id": p.ID})
+	return err
+}
+
+// SetPaneName overrides a pane's title (0: the focused pane); "" hands the
+// title back to the program.
+func (c *Client) SetPaneName(id int, name string) error {
+	_, err := c.Cmd(map[string]any{"cmd": "set-name", "target": "pane", "id": id, "name": name})
 	return err
 }
 

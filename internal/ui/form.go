@@ -54,6 +54,7 @@ const (
 	fKeyFile
 	fTerm
 	fTags
+	fEnv
 )
 
 func newForm(h *Host, pal Palette) *form {
@@ -79,8 +80,9 @@ func newForm(h *Host, pal Palette) *form {
 		}
 		return f
 	}
-	var alias, hostname, user, port, jump, auth, keyFile, term, tags string
+	var alias, hostname, user, port, jump, auth, keyFile, term, tags, env string
 	auth = authInherit
+	env = "from tags"
 	if h != nil {
 		b := h.Block
 		alias = h.Alias
@@ -94,6 +96,13 @@ func newForm(h *Host, pal Palette) *form {
 		}
 		term = h.termOverride()
 		tags = strings.Join(h.Tags, ", ")
+		if v := envComment(b); v != "" {
+			env = v
+		}
+	}
+	envOptions := []string{"from tags", "prod", "staging", "dev"}
+	if env != "from tags" && env != "prod" && env != "staging" && env != "dev" {
+		envOptions = append(envOptions, env)
 	}
 	termOpt := "inherit"
 	if term != "" {
@@ -113,6 +122,7 @@ func newForm(h *Host, pal Palette) *form {
 		text("key file", "~/.ssh/id_ed25519_sk (YubiKey picks it for you)", keyFile, "IdentityFile"),
 		sel("TERM", termOptions, termOpt, "SetEnv TERM=… for hosts without xterm-ghostty terminfo"),
 		text("tags", "homelab, prod", tags, "kept as a `# tags:` comment in the stanza"),
+		sel("env", envOptions, env, "prod is marked red everywhere, during the session too; a prod/staging/dev tag does the same"),
 	}}
 	f.fields[fAlias].input.Focus()
 	return f
@@ -238,5 +248,10 @@ func (f *form) apply(file *sshconf.File) *sshconf.Block {
 		}
 	}
 	b.SetTags(tags)
+	env := f.fields[fEnv].value()
+	if env == "from tags" {
+		env = ""
+	}
+	setEnvComment(b, env)
 	return b
 }

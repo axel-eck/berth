@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/axel-eck/berth/internal/probe"
 	"github.com/axel-eck/berth/internal/session"
+	"github.com/axel-eck/berth/internal/sign"
 	"github.com/axel-eck/berth/internal/slosh"
 	"github.com/axel-eck/berth/internal/sshconf"
 	"github.com/axel-eck/berth/internal/ui"
@@ -23,7 +25,7 @@ func main() {
 	cfg := flag.String("config", sshconf.DefaultPath(), "ssh config file to manage")
 	showVersion := flag.Bool("version", false, "print the version")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: berth [-config FILE] [ls | connect ALIAS]\n\n  ls              print the host aliases, one per line\n  connect ALIAS   open one session and exit when it ends\n\n")
+		fmt.Fprintf(os.Stderr, "usage: berth [-config FILE] [ls | connect ALIAS | sign]\n\n  ls              print the host aliases, one per line\n  connect ALIAS   open one session and exit when it ends\n  sign            the rotating warning sign (used by berth itself)\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -62,6 +64,10 @@ func main() {
 	}
 	sshconf.Validate = probe.CheckConfig
 
+	if flag.Arg(0) == "sign" {
+		os.Exit(runSign(flag.Args()[1:]))
+	}
+
 	sl := slosh.Detect()
 	pal, fixed := ui.DefaultPalette(true), false
 	if sl != nil {
@@ -92,4 +98,31 @@ func main() {
 			sl.Close(m.PaneID())
 		}
 	}
+}
+
+// runSign is `berth sign`: the rotating warning sign a production session
+// floats in its corner. It watches the session's pane and closes its own
+// when that one is gone or no longer marked.
+func runSign(args []string) int {
+	fs := flag.NewFlagSet("sign", flag.ContinueOnError)
+	label := fs.String("label", "PROD", "caption under the sign")
+	colour := fs.String("color", "#ff4d4f", "hex colour")
+	watch := fs.Int("watch", 0, "slosh pane id of the session to follow")
+	self := fs.Int("self", 0, "slosh pane id of this sign, closed on exit")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	sl := slosh.Detect()
+	m := sign.Model{Label: *label, Color: *colour}
+	if sl != nil && *watch != 0 {
+		m.Watch = func() bool {
+			p, ok := sl.PaneByID(*watch)
+			return ok && p.Alive && strings.HasPrefix(p.Status, "⚠")
+		}
+	}
+	tea.NewProgram(m).Run()
+	if sl != nil && *self != 0 {
+		sl.Close(*self)
+	}
+	return 0
 }
