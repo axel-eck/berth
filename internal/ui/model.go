@@ -71,6 +71,9 @@ type Model struct {
 
 	slosh    *slosh.Client
 	sessions map[string][]slosh.Pane
+	// keyWatching: a security key poll is running because sockets are
+	// open; keySeen: the key was there at the last reading.
+	keyWatching, keySeen bool
 	// sockets are the control masters berth knows to be up, alias to path.
 	// Berth's default path is probed on load; others are remembered for
 	// the run.
@@ -342,17 +345,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case socketMsg:
 		if msg.up {
 			m.sockets[msg.alias] = msg.path
+			return m, m.watchKey()
 		} else if m.sockets[msg.alias] == msg.path {
 			delete(m.sockets, msg.alias)
 		}
 		return m, nil
+	case keyStateMsg:
+		return m.onKeyState(msg.present)
 	case socketClosedMsg:
 		if msg.err != nil {
 			return m, m.say("socket: "+shortErr(msg.err), true)
 		}
 		delete(m.sockets, msg.alias)
 		return m, m.say(msg.alias+": socket closed", false)
-	case sessionStartedMsg, sessionEventMsg, sessionEndedMsg, spinMsg, countdownMsg:
+	case sessionStartedMsg, sessionEventMsg, sessionEndedMsg, spinMsg, countdownMsg, tokenMsg:
 		if m.conn == nil {
 			// The card was left before ssh had even started: don't orphan it.
 			if st, ok := msg.(sessionStartedMsg); ok && st.sess != nil {

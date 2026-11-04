@@ -39,10 +39,16 @@ type note struct {
 // connect is the screen between pressing enter and getting a shell, or,
 // for a control master, between pressing M and the socket being up.
 type connect struct {
-	alias     string
-	master    bool
-	socket    string
-	sess      *session.Session
+	alias  string
+	master bool
+	socket string
+	opts   session.Options
+	sess   *session.Session
+	// waiting: ssh has not been started because the FIDO key the host
+	// will sign with is not plugged in. seq tells a late poll result from
+	// the launch it belongs to.
+	waiting   bool
+	seq       int
 	steps     [4]stepView
 	notes     []note
 	prompt    *session.Event
@@ -63,18 +69,27 @@ func newConnect(alias string, pal Palette) *connect {
 	st.Cursor.Color = pal.Accent
 	ti.SetStyles(st)
 	c := &connect{alias: alias, input: ti}
+	c.resetSteps()
+	return c
+}
+
+// resetSteps is the card before ssh has said anything.
+func (c *connect) resetSteps() {
 	c.steps[session.StepConnect] = stepView{state: stepActive, text: "connecting"}
 	c.steps[session.StepHostKey] = stepView{text: "host key"}
 	c.steps[session.StepAuth] = stepView{text: "authentication"}
-	c.steps[session.StepSession] = stepView{text: "shell"}
-	return c
+	if c.master {
+		c.steps[session.StepSession] = stepView{text: "background master"}
+	} else {
+		c.steps[session.StepSession] = stepView{text: "shell"}
+	}
 }
 
 // newMaster is the card for a control master: same steps, no shell.
 func newMaster(alias, socket string, pal Palette) *connect {
 	c := newConnect(alias, pal)
 	c.master, c.socket = true, socket
-	c.steps[session.StepSession] = stepView{text: "background master"}
+	c.resetSteps()
 	return c
 }
 
@@ -87,9 +102,24 @@ type sessionEndedMsg struct {
 	alias   string
 	elapsed time.Duration
 	code    int
+	endedBy string // why berth killed ssh, if it did
 }
 type spinMsg struct{}
 type countdownMsg struct{}
+type tokenMsg struct {
+	seq     int
+	present bool
+}
+
+// tokenCheckCmd looks for a plugged-in security key after a delay: once
+// before ssh starts, then every so often while the card asks for it.
+func tokenCheckCmd(seq int, after time.Duration) tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(after)
+		return tokenMsg{seq, probe.TokenPresent()}
+	}
+}
+
 type splashMsg struct{}
 
 func splashTick() tea.Cmd {
@@ -273,6 +303,8 @@ func (m Model) connectLines(w int) []string {
 			back = fmt.Sprintf(" close   closing in %ds", c.closeIn)
 		}
 		lines = append(lines, "  "+m.st.warn.Render(c.failed), "", "  "+m.st.accent.Render("enter")+m.st.muted.Render(" retry   ")+m.st.accent.Render("esc")+m.st.muted.Render(back))
+	case c.waiting:
+		lines = append(lines, "  "+m.st.muted.Render("no security key plugged in · ssh starts when one is   ")+m.st.accent.Render("enter")+m.st.muted.Render(" try without   ")+m.st.accent.Render("esc")+m.st.muted.Render(" back"))
 	case c.sess != nil:
 		lines = append(lines, "  "+m.st.muted.Render(fmt.Sprintf("%s · esc cancels", c.sess.Elapsed())))
 	}
@@ -281,7 +313,13 @@ func (m Model) connectLines(w int) []string {
 
 func (m Model) startConnect(alias string) (Model, tea.Cmd) {
 	m.conn = newConnect(alias, m.pal)
-	return m.launch(session.Options{})
+	var opts session.Options
+	// A production shell dies with the key: pulling the YubiKey is the
+	// way to be sure nothing is left open.
+	if e := m.envOf(alias); e != nil && e.Name == "prod" && probe.TokenCheckable() {
+		opts.KeyGuard = probe.TokenPresent
+	}
+	return m.launch(opts)
 }
 
 // startMaster opens a control socket for alias at path, through the same
@@ -291,13 +329,53 @@ func (m Model) startMaster(alias, path string) (Model, tea.Cmd) {
 	return m.launch(session.Options{Args: probe.MasterArgs(path), Master: true})
 }
 
+// launch starts ssh for the card, unless the host will sign with a FIDO
+// key and none is plugged in: then the card asks for the key and waits,
+// instead of letting ssh fail with "signing failed" after the touch step.
 func (m Model) launch(opts session.Options) (Model, tea.Cmd) {
 	m.mode = modeConnect
+	c := m.conn
+	c.opts = opts
+	c.seq++
+	c.waiting = false
+	c.resetSteps()
+	if h := m.byAlias(c.alias); h != nil && len(h.securityKeyNames()) > 0 && probe.TokenCheckable() {
+		return m, tea.Batch(tokenCheckCmd(c.seq, 0), spinCmd())
+	}
+	return m.startSSH(true)
+}
+
+// startSSH runs ssh. spin starts the spinner, which a launch that waited
+// for the key already has running.
+func (m Model) startSSH(spin bool) (Model, tea.Cmd) {
+	c := m.conn
+	c.waiting = false
+	c.resetSteps()
 	cols, rows := m.width, m.height
 	if cols == 0 {
 		cols, rows = 80, 24
 	}
-	return m, tea.Batch(startSessionCmd(m.conn.alias, cols, rows, opts), spinCmd())
+	cmds := []tea.Cmd{startSessionCmd(c.alias, cols, rows, c.opts)}
+	if spin {
+		cmds = append(cmds, spinCmd())
+	}
+	return m, tea.Batch(cmds...)
+}
+
+// askForToken turns the card into a request for the key, polling until it
+// shows up.
+func (m Model) askForToken() (Model, tea.Cmd) {
+	c := m.conn
+	if !c.waiting {
+		c.waiting = true
+		c.steps[session.StepConnect].state = stepPending
+		keys := ""
+		if h := m.byAlias(c.alias); h != nil {
+			keys = strings.Join(h.securityKeyNames(), ", ")
+		}
+		c.steps[session.StepAuth] = stepView{state: stepActive, text: "plug in your YubiKey", detail: keys, attn: true}
+	}
+	return m, tokenCheckCmd(c.seq, 700*time.Millisecond)
 }
 
 func (m Model) updateConnect(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -314,6 +392,14 @@ func (m Model) updateConnect(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		c.sess = msg.sess
 		return m, waitEventCmd(c.sess)
+	case tokenMsg:
+		if msg.seq != c.seq || c.sess != nil || c.failed != "" {
+			return m, nil // from an earlier launch, or the wait was skipped
+		}
+		if msg.present {
+			return m.startSSH(false)
+		}
+		return m.askForToken()
 	case sessionEventMsg:
 		if msg.ev.Text == "approve in your agent" {
 			msg.ev.Text = "approve in " + m.agentName(c.alias)
@@ -335,7 +421,7 @@ func (m Model) updateConnect(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, tea.Exec(sess.Proxy(m.slosh != nil, cue), func(error) tea.Msg {
-				return sessionEndedMsg{sess.Alias, time.Since(started).Round(time.Second), sess.ExitCode()}
+				return sessionEndedMsg{sess.Alias, time.Since(started).Round(time.Second), sess.ExitCode(), sess.EndedBy()}
 			})
 		case session.EvExit:
 			if c.master && msg.ev.Err == nil {
@@ -346,6 +432,7 @@ func (m Model) updateConnect(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(
 					m.say("socket up: "+c.socket+" · Y copies ssh -S", false),
 					socketCheckCmd(c.alias, c.socket),
+					m.watchKey(),
 				)
 			}
 			if m.exitAfter {
@@ -370,15 +457,22 @@ func (m Model) updateConnect(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.exitAfter {
 			// Keep the card up for the last frame rather than flashing the list.
 			m.summary = fmt.Sprintf("berth: %s · %s", msg.alias, msg.elapsed)
+			if msg.endedBy != "" {
+				m.summary += " · " + msg.endedBy
+			}
 			return m, tea.Quit
 		}
 		m.conn = nil
 		m.mode = modeList
 		text := fmt.Sprintf("%s: disconnected after %s", msg.alias, msg.elapsed)
-		if msg.code != 0 {
+		warn := msg.code != 0
+		if msg.endedBy != "" {
+			text = fmt.Sprintf("%s: %s, session closed after %s", msg.alias, msg.endedBy, msg.elapsed)
+			warn = true
+		} else if msg.code != 0 {
 			text += fmt.Sprintf(" (exit %d)", msg.code)
 		}
-		cmds := []tea.Cmd{m.say(text, msg.code != 0)}
+		cmds := []tea.Cmd{m.say(text, warn)}
 		if h := m.byAlias(msg.alias); h != nil && h.Eff != nil && h.jump() == "" {
 			h.Reach = reachProbing
 			cmds = append(cmds, reachCmd(h.Alias, h.hostname(), h.port()))
@@ -418,6 +512,14 @@ func (m Model) updateConnect(msg tea.Msg) (tea.Model, tea.Cmd) {
 				c.sess.Kill()
 			}
 			return m.leaveConnect()
+		}
+		if c.waiting {
+			if key == "enter" {
+				// Without the key: an agent may still have one the server takes.
+				c.seq++
+				return m.startSSH(false)
+			}
+			return m, nil
 		}
 		if p := c.prompt; p != nil && c.sess != nil {
 			if p.Choice {
@@ -571,6 +673,51 @@ type socketMsg struct {
 	alias, path string
 	up          bool
 }
+
+// keyStateMsg is one reading of the security key while sockets are open.
+type keyStateMsg struct{ present bool }
+
+func keyWatchCmd() tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(time.Second)
+		return keyStateMsg{probe.TokenPresent()}
+	}
+}
+
+// watchKey starts watching the security key while control sockets are
+// open, so pulling the key closes every master too: a socket is an
+// authenticated connection anyone on the machine can ride. Returns nil
+// when there is nothing to watch, or a watch is already running.
+func (m *Model) watchKey() tea.Cmd {
+	if m.keyWatching || len(m.sockets) == 0 || !probe.TokenCheckable() {
+		return nil
+	}
+	m.keyWatching = true
+	return keyWatchCmd()
+}
+
+// onKeyState closes every socket the moment a key that was there is gone.
+func (m Model) onKeyState(present bool) (Model, tea.Cmd) {
+	if len(m.sockets) == 0 {
+		m.keyWatching, m.keySeen = false, false
+		return m, nil
+	}
+	if present {
+		m.keySeen = true
+		return m, keyWatchCmd()
+	}
+	if !m.keySeen {
+		return m, keyWatchCmd() // never had the key: the sockets were opened without it
+	}
+	m.keySeen = false
+	cmds := []tea.Cmd{keyWatchCmd()}
+	for alias, path := range m.sockets {
+		cmds = append(cmds, socketCloseCmd(alias, path))
+	}
+	cmds = append(cmds, m.say(fmt.Sprintf("%s: closing %d socket(s)", session.KeyRemoved, len(m.sockets)), true))
+	return m, tea.Batch(cmds...)
+}
+
 type socketClosedMsg struct {
 	alias string
 	err   error

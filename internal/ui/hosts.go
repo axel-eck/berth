@@ -418,3 +418,18 @@ func setTermOverride(b *sshconf.Block, term string) {
 		b.Append("SetEnv", "TERM="+term)
 	}
 }
+
+// securityKeyNames are the FIDO keys ssh will offer for this host, by file
+// name: the ones on disk among its effective IdentityFiles. ssh -G lists
+// the default id_*_sk names for every host, so a key in ~/.ssh counts even
+// when an agent answers first and the file is only the fallback, as the
+// fallback is exactly what runs when the agent has nothing the server takes.
+func (h *Host) securityKeyNames() []string {
+	var names []string
+	for _, k := range h.existingKeys() {
+		if skRe.MatchString(k) {
+			names = append(names, filepath.Base(k))
+		}
+	}
+	return names
+}

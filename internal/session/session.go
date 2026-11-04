@@ -90,6 +90,7 @@ type Session struct {
 	Started time.Time
 
 	master  bool
+	guard   func() bool
 	cmd     *exec.Cmd
 	pty     *os.File
 	logPath string
@@ -113,6 +114,7 @@ type Session struct {
 	done     chan struct{}
 	exitCode int
 	exitErr  error
+	endedBy  string // why berth killed ssh, "" when it exited on its own
 }
 
 // Options tune what Start runs.
@@ -122,6 +124,11 @@ type Options struct {
 	// Master means ssh is expected to authenticate and fork to the
 	// background rather than hand over a shell: success is ssh exiting 0.
 	Master bool
+	// KeyGuard, when set, is asked every second whether the security key
+	// is still plugged in once the shell is up; the moment it says no, ssh
+	// is killed, so pulling the YubiKey ends the session. Not armed when
+	// the key was already absent at handover: the user chose to go without.
+	KeyGuard func() bool
 }
 
 // Start launches ssh for alias with a pty of the given size.
@@ -146,6 +153,7 @@ func Start(alias string, cols, rows int, opts Options) (*Session, error) {
 		Events:  make(chan Event, 64),
 		Started: time.Now(),
 		master:  opts.Master,
+		guard:   opts.KeyGuard,
 		cmd:     cmd,
 		pty:     ptmx,
 		logPath: logFile.Name(),
@@ -175,6 +183,39 @@ func (s *Session) Kill() {
 
 // ExitCode is ssh's exit status once it has exited.
 func (s *Session) ExitCode() int { return s.exitCode }
+
+// EndedBy says why berth killed ssh, or "" when ssh ended on its own.
+func (s *Session) EndedBy() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.endedBy
+}
+
+// KeyRemoved is EndedBy's reason when the guard pulled the plug.
+const KeyRemoved = "security key removed"
+
+// guardKey polls the KeyGuard until ssh exits, killing it when the key goes.
+func (s *Session) guardKey() {
+	if !s.guard() {
+		return
+	}
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-t.C:
+			if !s.guard() {
+				s.mu.Lock()
+				s.endedBy = KeyRemoved
+				s.mu.Unlock()
+				s.Kill()
+				return
+			}
+		}
+	}
+}
 
 // Done closes when ssh has exited.
 func (s *Session) Done() <-chan struct{} { return s.done }
@@ -762,6 +803,9 @@ func (p *Proxy) Run() error {
 		tinted = true
 	}
 	go io.Copy(p.s.pty, cr)
+	if p.s.guard != nil {
+		go p.s.guardKey()
+	}
 	<-p.s.done
 	cr.Cancel()
 	cr.Close()
