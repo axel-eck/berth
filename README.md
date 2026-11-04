@@ -166,6 +166,13 @@ takes. The check uses `fido2-token -L` (from libfido2, which FIDO-capable
 OpenSSH builds depend on) or `ykman list`, whichever is on `PATH`; with
 neither, ssh is started straight away.
 
+The key also ends what it opened. On a production host (see
+[environments](#environments-never-mistake-prod-for-staging)) pulling the
+key kills the session within a second, and while control sockets are open
+berth keeps watching: the key going away closes every master. Both only
+arm when the key was there to begin with, so a session or socket opened
+without it (`enter` on the waiting card) is left alone.
+
 ### Editing
 
 The form has alias, hostname, user, port, jump host, an auth preset, key
@@ -257,7 +264,8 @@ were *given* `berth connect <alias>` as their command, carrying the purpose
   sent on them, and hosts behind a jump host or `ProxyCommand` are skipped.
 - The slosh control socket, when running inside slosh.
 - `fido2-token -L` or `ykman list`, before connecting to a host that has a
-  FIDO key, to see whether the key is plugged in.
+  FIDO key, and once a second during a production session or while control
+  sockets are open, to see whether the key is still plugged in.
 - `chezmoi re-add` on the config, only if chezmoi already manages it.
 
 ## License

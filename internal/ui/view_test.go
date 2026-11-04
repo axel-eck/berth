@@ -374,3 +374,29 @@ func TestConnectCardWaitsForTheSecurityKey(t *testing.T) {
 		t.Error("a present key should start ssh with a fresh card")
 	}
 }
+
+func TestSocketsCloseWhenTheKeyGoes(t *testing.T) {
+	m := load(t, 100, 26)
+	m.sockets["pve"] = "/tmp/ssh-pve"
+	m.keyWatching = true
+	next, _ := m.onKeyState(false)
+	m = next
+	if m.keySeen || m.toast != "" {
+		t.Fatal("sockets opened without the key must survive its absence")
+	}
+	next, _ = m.onKeyState(true)
+	m = next
+	if !m.keySeen {
+		t.Fatal("a present key should be remembered")
+	}
+	next, cmd := m.onKeyState(false)
+	m = next
+	if m.keySeen || cmd == nil || !strings.Contains(m.toast, session.KeyRemoved) {
+		t.Errorf("the key going away should close the sockets and say so, toast=%q", m.toast)
+	}
+	delete(m.sockets, "pve")
+	next, cmd = m.onKeyState(true)
+	if next.keyWatching || cmd != nil {
+		t.Error("with no socket left the watch should stop")
+	}
+}
