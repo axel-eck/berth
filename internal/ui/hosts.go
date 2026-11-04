@@ -244,19 +244,22 @@ func (h *Host) authSummary() string {
 			hasSK = true
 		}
 	}
+	// With IdentitiesOnly the listed keys are the whole story, whatever
+	// IdentityAgent resolves to: a `Host *` above the stanza keeps its
+	// agent (first value wins in ssh_config), but ssh only offers these.
 	switch {
-	case strings.Contains(strings.ToLower(agent), "1password"):
-		s := "1Password agent"
-		if len(keys) > 0 && !only {
-			s += " · " + strings.Join(names, ", ") + " as fallback"
-		}
-		return s
 	case only && hasSK:
 		return "YubiKey · " + strings.Join(names, ", ")
 	case only && len(keys) > 0:
 		return "key file · " + strings.Join(names, ", ")
 	case only:
 		return "IdentitiesOnly but no key on disk"
+	case strings.Contains(strings.ToLower(agent), "1password"):
+		s := "1Password agent"
+		if len(keys) > 0 {
+			s += " · " + strings.Join(names, ", ") + " as fallback"
+		}
+		return s
 	case agent == "" || agent == "none":
 		if os.Getenv("SSH_AUTH_SOCK") != "" && agent == "" {
 			return "ssh-agent ($SSH_AUTH_SOCK)" + suffixKeys(names)

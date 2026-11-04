@@ -400,3 +400,29 @@ func TestSocketsCloseWhenTheKeyGoes(t *testing.T) {
 		t.Error("with no socket left the watch should stop")
 	}
 }
+
+func TestAuthSummaryTrustsIdentitiesOnlyOverTheAgent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".ssh", "id_ed25519_sk"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A `Host *` above the stanza keeps 1Password as the agent even when
+	// the stanza says IdentityAgent none: first value wins in ssh_config.
+	onePassword := "/x/2BUA8C4S2C.com.1password/t/agent.sock"
+	h := &Host{Alias: "podman", Eff: probe.Effective{
+		"identitiesonly": {"yes"},
+		"identityagent":  {onePassword},
+		"identityfile":   {"~/.ssh/id_ed25519_sk"},
+	}}
+	if got := h.authSummary(); got != "YubiKey · id_ed25519_sk" {
+		t.Errorf("authSummary = %q, want the YubiKey", got)
+	}
+	h.Eff["identitiesonly"] = []string{"no"}
+	if got := h.authSummary(); got != "1Password agent · id_ed25519_sk as fallback" {
+		t.Errorf("authSummary = %q, want 1Password with the key as fallback", got)
+	}
+}
