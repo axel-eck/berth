@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/axel-eck/berth/internal/probe"
 	"github.com/axel-eck/berth/internal/session"
 )
 
@@ -313,5 +314,63 @@ func TestAddHostWritesStanza(t *testing.T) {
 	want := "\nHost bastion\n\tHostName 10.9.9.9\n\tUser ops\n\tPort 2200\n\tIdentityAgent \"" + onePasswordSocket() + "\"\n"
 	if !strings.HasSuffix(got, want) {
 		t.Fatalf("stanza written:\n%s", got)
+	}
+}
+
+func TestSecurityKeyNamesAreTheSKFilesOnDisk(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"id_ed25519_sk", "id_ed25519"} {
+		if err := os.WriteFile(filepath.Join(home, ".ssh", f), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := &Host{Alias: "pve", Eff: probe.Effective{"identityfile": {"~/.ssh/id_ed25519", "~/.ssh/id_ecdsa_sk", "~/.ssh/id_ed25519_sk"}}}
+	if got := h.securityKeyNames(); len(got) != 1 || got[0] != "id_ed25519_sk" {
+		t.Errorf("securityKeyNames = %v, want [id_ed25519_sk]", got)
+	}
+	if got := (&Host{Alias: "x"}).securityKeyNames(); got != nil {
+		t.Errorf("no effective config should mean no keys, got %v", got)
+	}
+}
+
+func TestConnectCardWaitsForTheSecurityKey(t *testing.T) {
+	m := load(t, 100, 26)
+	m.conn = newConnect("pve", m.pal)
+	m.mode = modeConnect
+	seq := m.conn.seq
+	next, _ := m.updateConnect(tokenMsg{seq: seq, present: false})
+	m = next.(Model)
+	if !m.conn.waiting {
+		t.Fatal("an absent key should put the card in waiting")
+	}
+	plain := ansi.Strip(m.View().Content)
+	for _, want := range []string{"plug in your YubiKey", "try without"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("waiting card lacks %q:\n%s", want, plain)
+		}
+	}
+	assertGrid(t, "connect-waiting", m)
+
+	// A poll from before the wait was skipped must not restart anything.
+	m = press(m, "enter")
+	if m.conn.waiting || m.conn.seq == seq {
+		t.Fatal("enter should leave the wait and start a new launch")
+	}
+	next, cmd := m.updateConnect(tokenMsg{seq: seq, present: false})
+	m = next.(Model)
+	if m.conn.waiting || cmd != nil {
+		t.Error("a stale poll result was not ignored")
+	}
+
+	// The key shows up: the card goes back to connecting.
+	m.conn.waiting = true
+	next, _ = m.updateConnect(tokenMsg{seq: m.conn.seq, present: true})
+	m = next.(Model)
+	if m.conn.waiting || m.conn.steps[session.StepConnect].state != stepActive {
+		t.Error("a present key should start ssh with a fresh card")
 	}
 }

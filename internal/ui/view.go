@@ -467,6 +467,8 @@ func (m Model) footer() string {
 		left = k("esc", "cancel")
 		if m.conn != nil && m.conn.failed != "" {
 			left = k("enter", "retry") + "  " + k("esc", "back")
+		} else if m.conn != nil && m.conn.waiting {
+			left = k("enter", "try without the key") + "  " + k("esc", "back")
 		}
 	case modeSocket:
 		left = k("enter", "open") + "  " + k("esc", "cancel")

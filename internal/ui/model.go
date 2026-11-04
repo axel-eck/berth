@@ -352,7 +352,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		delete(m.sockets, msg.alias)
 		return m, m.say(msg.alias+": socket closed", false)
-	case sessionStartedMsg, sessionEventMsg, sessionEndedMsg, spinMsg, countdownMsg:
+	case sessionStartedMsg, sessionEventMsg, sessionEndedMsg, spinMsg, countdownMsg, tokenMsg:
 		if m.conn == nil {
 			// The card was left before ssh had even started: don't orphan it.
 			if st, ok := msg.(sessionStartedMsg); ok && st.sess != nil {

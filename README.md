@@ -157,6 +157,15 @@ A failed connection stays on screen with the reason; `enter` retries. In a
 pane berth spawned, the pane closes when the session ends (or a few seconds
 after a failure), so dead panes do not pile up.
 
+When the host will sign with a FIDO key (an `id_*_sk` file on disk among
+its identities, even as the fallback behind an agent) and none is plugged
+in, the card says `plug in your YubiKey` and starts ssh the moment one
+appears, instead of letting ssh fail with `signing failed` after the touch
+step. `enter` tries without it, for when the agent has a key the server
+takes. The check uses `fido2-token -L` (from libfido2, which FIDO-capable
+OpenSSH builds depend on) or `ykman list`, whichever is on `PATH`; with
+neither, ssh is started straight away.
+
 ### Editing
 
 The form has alias, hostname, user, port, jump host, an auth preset, key
@@ -247,6 +256,8 @@ were *given* `berth connect <alias>` as their command, carrying the purpose
 - TCP connections to each host's port for the reachability dot. Nothing is
   sent on them, and hosts behind a jump host or `ProxyCommand` are skipped.
 - The slosh control socket, when running inside slosh.
+- `fido2-token -L` or `ykman list`, before connecting to a host that has a
+  FIDO key, to see whether the key is plugged in.
 - `chezmoi re-add` on the config, only if chezmoi already manages it.
 
 ## License
